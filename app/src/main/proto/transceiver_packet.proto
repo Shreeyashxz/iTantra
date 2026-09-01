@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package com.itantra.proto;
+
+option java_package = "com.itantra.proto";
+option java_outer_classname = "TransceiverPacketProto";
+option optimize_for = LITE_RUNTIME;
+
+message TransceiverPacket {
+  string sender_id = 1;          // Device UUID (8 bytes)
+  string language_code = 2;      // "hi", "en", "ta", etc.
+  string transcript = 3;         // STT output text (main payload)
+  int64 timestamp_ms = 4;        // Epoch millis
+  PacketType type = 5;           // VOICE, ALERT, ACK
+
+  enum PacketType {
+    VOICE = 0;
+    ALERT = 1;                   // Max volume, non-interruptible
+    ACK = 2;                     // Delivery confirmation
+  }
+}
