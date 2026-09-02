@@ -84,8 +84,8 @@ class TransceiverController extends ChangeNotifier {
       notifyListeners();
     });
 
-    // Listen for connection status changes
-    _statusSubscription = wifiDirectManager.connectionStatus.listen((status) {
+    // Listen for real connection status changes from TransceiverManager
+    _statusSubscription = transceiverManager.connectionState.listen((status) {
       _connectionStatus = status;
       notifyListeners();
     });
@@ -119,7 +119,7 @@ class TransceiverController extends ChangeNotifier {
     }
   }
 
-  /// Sends a simulated or manual voice utterance through the transceiver pipeline
+  /// Broadcasts a voice or quiet-mode utterance through the mesh transceiver pipeline
   Future<void> sendUtterance(String text) async {
     if (text.trim().isEmpty) return;
 

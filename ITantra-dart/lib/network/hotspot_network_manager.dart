@@ -124,7 +124,7 @@ class HotspotNetworkManager {
         InternetAddress.anyIPv4,
         beaconPort,
         reuseAddress: true,
-        reusePort: true,
+        reusePort: !Platform.isWindows,
       );
       _receiverSocket!.broadcastEnabled = true;
 
@@ -170,25 +170,51 @@ class HotspotNetworkManager {
         );
         _broadcastSocket!.broadcastEnabled = true;
 
-        // Broadcast to general subnet
+        // Broadcast to universal subnet
         _broadcastSocket!.send(
           bytes,
           InternetAddress('255.255.255.255'),
           beaconPort,
         );
 
-        // Also broadcast directly to standard Android hotspot subnet broadcast if applicable
-        if (myIp.startsWith('192.168.43.')) {
-          _broadcastSocket!.send(
-            bytes,
-            InternetAddress('192.168.43.255'),
-            beaconPort,
-          );
+        // Also broadcast directly to specific subnets for all active non-loopback interfaces
+        final allIps = await getLocalIpAddresses();
+        for (final ip in allIps) {
+          if (ip.contains('.')) {
+            final subnetPrefix = ip.substring(0, ip.lastIndexOf('.'));
+            final subnetBroadcast = '$subnetPrefix.255';
+            try {
+              _broadcastSocket!.send(
+                bytes,
+                InternetAddress(subnetBroadcast),
+                beaconPort,
+              );
+            } catch (_) {}
+          }
         }
+
+        // Auto-prune peers not seen in the last 12 seconds
+        _pruneStalePeers();
       } catch (e) {
         debugPrint('Beacon broadcast error: $e');
       }
     });
+  }
+
+  void _pruneStalePeers() {
+    final now = DateTime.now();
+    final expiredIps = <String>[];
+    for (final entry in _discoveredPeers.entries) {
+      if (now.difference(entry.value.lastSeen).inSeconds > 12) {
+        expiredIps.add(entry.key);
+      }
+    }
+    if (expiredIps.isNotEmpty) {
+      for (final ip in expiredIps) {
+        _discoveredPeers.remove(ip);
+      }
+      _peersController.add(currentPeers);
+    }
   }
 
   /// Stops broadcasting beacons.
@@ -201,7 +227,7 @@ class HotspotNetworkManager {
     _updateStatus('Hotspot beacon broadcast stopped');
   }
 
-  void _handleIncomingBeacon(Datagram datagram) {
+  void _handleIncomingBeacon(Datagram datagram) async {
     try {
       final message = utf8.decode(datagram.data);
       if (!message.startsWith(beaconPrefix)) return;
@@ -214,6 +240,11 @@ class HotspotNetworkManager {
         final senderIp = parts[2].isNotEmpty && parts[2] != '0.0.0.0'
             ? parts[2]
             : datagram.address.address;
+
+        // Skip our own broadcasts
+        final myIps = await getLocalIpAddresses();
+        if (myIps.contains(senderIp)) return;
+
         final port = int.tryParse(parts[3]) ?? TransceiverManager.port;
         final isHost = parts.length >= 5 ? parts[4] == 'true' : senderIp.endsWith('.1');
 

@@ -82,7 +82,7 @@ class HomeScreen extends StatelessWidget {
 
             _ActionTile(
               title: 'Peer Discovery & Mesh',
-              subtitle: 'Connect devices over Wi-Fi Direct P2P',
+              subtitle: 'Connect devices over Wi-Fi LAN / Hotspot Mesh',
               icon: Icons.wifi_tethering_rounded,
               color: theme.colorScheme.secondary,
               onTap: () => Navigator.of(context).push(

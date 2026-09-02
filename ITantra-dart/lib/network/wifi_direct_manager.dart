@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'transceiver_manager.dart';
 
 class WifiP2pPeer {
@@ -58,27 +59,36 @@ class WifiDirectManager {
 
   Future<void> startDiscovery() async {
     _isDiscovering = true;
-    _updateStatus('Discovering nearby peers...');
+    _updateStatus('Scanning for active Wi-Fi Direct peers...');
 
-    // Simulate scanning discovery for nearby iTantra nodes on local Wi-Fi Direct mesh
-    await Future.delayed(const Duration(milliseconds: 1200));
+    final foundPeers = <WifiP2pPeer>[];
 
-    _currentPeers = [
-      const WifiP2pPeer(
-        deviceAddress: '192.168.49.1',
-        deviceName: 'iTantra-BaseNode-Alpha',
-        status: 3,
-        isGroupOwner: true,
-      ),
-      const WifiP2pPeer(
-        deviceAddress: '192.168.49.42',
-        deviceName: 'iTantra-Responder-Beta',
-        status: 3,
-        isGroupOwner: false,
-      ),
-    ];
+    // Check Wi-Fi Direct Group Owner default address (192.168.49.1)
+    try {
+      final socket = await Socket.connect(
+        '192.168.49.1',
+        TransceiverManager.port,
+        timeout: const Duration(milliseconds: 500),
+      );
+      socket.destroy();
+      foundPeers.add(
+        const WifiP2pPeer(
+          deviceAddress: '192.168.49.1',
+          deviceName: 'Wi-Fi Direct Group Owner (192.168.49.1)',
+          status: 3,
+          isGroupOwner: true,
+        ),
+      );
+    } catch (_) {
+      // Group owner not reachable
+    }
+
+    _currentPeers = foundPeers;
     _peersController.add(_currentPeers);
-    _updateStatus('Peers found (${_currentPeers.length})');
+    _isDiscovering = false;
+    _updateStatus(_currentPeers.isEmpty
+        ? 'No active Wi-Fi Direct peers found'
+        : 'Found ${_currentPeers.length} peer(s)');
   }
 
   Future<bool> connectToPeer(WifiP2pPeer peer) async {

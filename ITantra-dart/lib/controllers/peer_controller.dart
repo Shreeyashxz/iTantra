@@ -74,12 +74,23 @@ class PeerController extends ChangeNotifier {
       }
     });
 
+    // Also listen directly to TransceiverManager socket connection state
+    hotspotNetworkManager.transceiverManager.connectionState.listen((state) {
+      _connectionStatus = state;
+      notifyListeners();
+    });
+
     _initHotspotState();
   }
 
   Future<void> _initHotspotState() async {
     _localIp = await hotspotNetworkManager.getPrimaryIpAddress();
     await hotspotNetworkManager.startBeaconReceiver();
+    // Auto-broadcast presence beacon so nodes discover each other zero-config
+    await hotspotNetworkManager.startBeaconBroadcaster(
+      nodeId: deviceId,
+      nodeName: 'iTantra Node (${_localIp ?? "WiFi"})',
+    );
     notifyListeners();
   }
 
