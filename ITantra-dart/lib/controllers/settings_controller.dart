@@ -17,11 +17,13 @@ class SettingsController extends ChangeNotifier {
   bool _isSttReady = false;
   bool get isSttReady => _isSttReady;
 
-  bool _isHiTtsReady = false;
-  bool get isHiTtsReady => _isHiTtsReady;
+  final Map<String, bool> _ttsReadyMap = {};
+  bool isTtsReady(String code) => _ttsReadyMap[code] ?? false;
 
-  bool _isEnTtsReady = false;
-  bool get isEnTtsReady => _isEnTtsReady;
+  bool get isHiTtsReady => isTtsReady('hi');
+  bool get isEnTtsReady => isTtsReady('en');
+
+  List<LanguageMetadata> get languages => LanguagePackManager.supportedLanguages;
 
   StreamSubscription<DownloadState>? _downloadSubscription;
 
@@ -48,8 +50,9 @@ class SettingsController extends ChangeNotifier {
 
   Future<void> checkModelStatus() async {
     _isSttReady = await languagePackManager.isSttAvailable();
-    _isHiTtsReady = await languagePackManager.isTtsAvailable('hi');
-    _isEnTtsReady = await languagePackManager.isTtsAvailable('en');
+    for (final lang in LanguagePackManager.supportedLanguages) {
+      _ttsReadyMap[lang.code] = await languagePackManager.isTtsAvailable(lang.code);
+    }
     notifyListeners();
   }
 
@@ -60,6 +63,11 @@ class SettingsController extends ChangeNotifier {
 
   Future<void> downloadTts(String languageCode) async {
     await languagePackManager.downloadTts(languageCode);
+    await checkModelStatus();
+  }
+
+  Future<void> downloadAllLanguages() async {
+    await languagePackManager.downloadAllLanguages();
     await checkModelStatus();
   }
 

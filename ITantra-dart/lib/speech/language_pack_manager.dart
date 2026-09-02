@@ -28,7 +28,34 @@ class DownloadStateError extends DownloadState {
   const DownloadStateError(this.message);
 }
 
+class LanguageMetadata {
+  final String code;
+  final String iso3;
+  final String englishName;
+  final String nativeName;
+
+  const LanguageMetadata({
+    required this.code,
+    required this.iso3,
+    required this.englishName,
+    required this.nativeName,
+  });
+}
+
 class LanguagePackManager {
+  static const List<LanguageMetadata> supportedLanguages = [
+    LanguageMetadata(code: 'hi', iso3: 'hin', englishName: 'Hindi', nativeName: 'हिंदी'),
+    LanguageMetadata(code: 'en', iso3: 'eng', englishName: 'English', nativeName: 'English'),
+    LanguageMetadata(code: 'gu', iso3: 'guj', englishName: 'Gujarati', nativeName: 'ગુજરાતી'),
+    LanguageMetadata(code: 'mr', iso3: 'mar', englishName: 'Marathi', nativeName: 'मराठी'),
+    LanguageMetadata(code: 'kn', iso3: 'kan', englishName: 'Kannada', nativeName: 'ಕನ್ನಡ'),
+    LanguageMetadata(code: 'ml', iso3: 'mal', englishName: 'Malayalam', nativeName: 'മലയാളം'),
+    LanguageMetadata(code: 'ta', iso3: 'tam', englishName: 'Tamil', nativeName: 'தமிழ்'),
+    LanguageMetadata(code: 'te', iso3: 'tel', englishName: 'Telugu', nativeName: 'తెలుగు'),
+    LanguageMetadata(code: 'or', iso3: 'ory', englishName: 'Odia', nativeName: 'ଓଡ଼ିଆ'),
+    LanguageMetadata(code: 'bn', iso3: 'ben', englishName: 'Bengali', nativeName: 'বাংলা'),
+  ];
+
   final _downloadStateController = StreamController<DownloadState>.broadcast();
   Stream<DownloadState> get downloadState => _downloadStateController.stream;
   DownloadState _currentState = const DownloadStateIdle();
@@ -90,7 +117,7 @@ class LanguagePackManager {
           });
         }
       }
-      _emitState(const DownloadStateCompleted('STT Model Ready'));
+      _emitState(const DownloadStateCompleted('STT Neural Engine Ready'));
       return true;
     } catch (e) {
       debugPrint('Error downloading STT: $e');
@@ -99,22 +126,23 @@ class LanguagePackManager {
     }
   }
 
+  /// Downloads Meta MMS-TTS ONNX model for any of the 10 SIH 26173 languages
   Future<bool> downloadTts(String languageCode) async {
+    final langMeta = supportedLanguages.where((l) => l.code == languageCode).firstOrNull;
+    if (langMeta == null) {
+      _emitState(DownloadStateError('Unsupported language code: $languageCode'));
+      return false;
+    }
+
     final modelsDir = await getModelsDirectory();
     final ttsDir = Directory(p.join(modelsDir.path, 'tts', languageCode));
     if (!await ttsDir.exists()) {
       await ttsDir.create(recursive: true);
     }
 
-    final (baseUrl, modelFile) = languageCode == 'hi'
-        ? (
-            'https://huggingface.co/csukuangfj/vits-piper-hi_IN-pratham-medium/resolve/main',
-            'hi_IN-pratham-medium.onnx',
-          )
-        : (
-            'https://huggingface.co/csukuangfj/vits-piper-en_US-amy-low/resolve/main',
-            'en_US-amy-low.onnx',
-          );
+    // Unified Meta MMS-TTS ONNX repository for all 10 languages
+    final mmsBaseUrl =
+        'https://huggingface.co/willwade/mms-tts-multilingual-models-onnx/resolve/main/${langMeta.iso3}';
 
     try {
       final targetModel = File(p.join(ttsDir.path, 'vits.onnx'));
@@ -122,16 +150,16 @@ class LanguagePackManager {
       final targetLexicon = File(p.join(ttsDir.path, 'lexicon.txt'));
 
       if (!await targetModel.exists() || (await targetModel.length()) == 0) {
-        _emitState(DownloadStateDownloading('TTS $languageCode (voice)', 0));
-        await _downloadFileWithRedirects('$baseUrl/$modelFile', targetModel, (percent) {
-          _emitState(DownloadStateDownloading('TTS $languageCode (voice)', percent));
+        _emitState(DownloadStateDownloading('${langMeta.englishName} Voice (Model)', 0));
+        await _downloadFileWithRedirects('$mmsBaseUrl/model.onnx', targetModel, (percent) {
+          _emitState(DownloadStateDownloading('${langMeta.englishName} Voice (Model)', percent));
         });
       }
 
       if (!await targetTokens.exists() || (await targetTokens.length()) == 0) {
-        _emitState(DownloadStateDownloading('TTS $languageCode (tokens)', 0));
-        await _downloadFileWithRedirects('$baseUrl/tokens.txt', targetTokens, (percent) {
-          _emitState(DownloadStateDownloading('TTS $languageCode (tokens)', percent));
+        _emitState(DownloadStateDownloading('${langMeta.englishName} Voice (Tokens)', 0));
+        await _downloadFileWithRedirects('$mmsBaseUrl/tokens.txt', targetTokens, (percent) {
+          _emitState(DownloadStateDownloading('${langMeta.englishName} Voice (Tokens)', percent));
         });
       }
 
@@ -139,20 +167,33 @@ class LanguagePackManager {
         await targetLexicon.writeAsString('');
       }
 
-      _emitState(DownloadStateCompleted('TTS for $languageCode Ready'));
+      _emitState(DownloadStateCompleted('${langMeta.englishName} (${langMeta.nativeName}) TTS Ready'));
       return true;
     } catch (e) {
-      debugPrint('Error downloading TTS: $e');
-      _emitState(DownloadStateError('TTS Download failed: $e'));
+      debugPrint('Error downloading TTS ($languageCode): $e');
+      _emitState(DownloadStateError('${langMeta.englishName} TTS download failed: $e'));
       return false;
     }
   }
 
-  Future<bool> downloadAllEssentials() async {
-    final sttOk = await downloadStt();
-    final ttsHiOk = await downloadTts('hi');
-    final ttsEnOk = await downloadTts('en');
-    return sttOk && ttsHiOk && ttsEnOk;
+  /// Downloads all 10 language packs sequentially
+  Future<void> downloadAllLanguages() async {
+    for (final lang in supportedLanguages) {
+      final available = await isTtsAvailable(lang.code);
+      if (!available) {
+        final success = await downloadTts(lang.code);
+        if (!success) break;
+      }
+    }
+    await downloadStt();
+    _emitState(const DownloadStateCompleted('All 10 Indian Language Neural Models Installed!'));
+  }
+
+  Future<void> downloadAllEssentials() async {
+    await downloadStt();
+    await downloadTts('hi');
+    await downloadTts('en');
+    _emitState(const DownloadStateCompleted('Essential Language Models Ready'));
   }
 
   Future<void> _downloadFileWithRedirects(
@@ -161,23 +202,18 @@ class LanguagePackManager {
     void Function(int percent) onProgress,
   ) async {
     final client = HttpClient();
-    client.autoUncompress = true;
-    client.connectionTimeout = const Duration(seconds: 20);
-
     try {
       var currentUri = Uri.parse(urlStr);
-      var redirects = 0;
-      const maxRedirects = 10;
       HttpClientResponse? response;
+      var redirects = 0;
 
-      while (redirects < maxRedirects) {
+      while (redirects < 10) {
         final request = await client.getUrl(currentUri);
-        request.headers.set(HttpHeaders.userAgentHeader, 'Mozilla/5.0 (compatible; iTantra/1.0)');
-        request.followRedirects = false; // Manually handle to properly resolve relative and cross-domain locations
+        request.headers.set(HttpHeaders.acceptHeader, '*/*');
+        request.headers.set(HttpHeaders.userAgentHeader, 'iTantra/1.0.0 (Windows)');
         response = await request.close();
 
-        if (response.isRedirect ||
-            response.statusCode == HttpStatus.movedPermanently ||
+        if (response.statusCode == HttpStatus.movedPermanently ||
             response.statusCode == HttpStatus.movedTemporarily ||
             response.statusCode == HttpStatus.seeOther ||
             response.statusCode == HttpStatus.temporaryRedirect ||

@@ -60,26 +60,40 @@ class SettingsScreen extends StatelessWidget {
 
                     // STT Status
                     _ModelStatusRow(
-                      title: 'STT Engine (Zipformer INT8)',
+                      title: 'STT Engine (Sherpa-ONNX Zipformer INT8)',
                       isReady: settingsController.isSttReady,
                       onDownload: () => settingsController.downloadStt(),
                     ),
-                    const Divider(height: 20),
+                    const Divider(height: 24),
 
-                    // Hindi TTS Status
-                    _ModelStatusRow(
-                      title: 'TTS Voice — Hindi (VITS)',
-                      isReady: settingsController.isHiTtsReady,
-                      onDownload: () => settingsController.downloadTts('hi'),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'TTS Voices — 10 Languages (Meta MMS)',
+                          style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+                        ),
+                        TextButton.icon(
+                          onPressed: () => settingsController.downloadAllLanguages(),
+                          icon: const Icon(Icons.download_for_offline_rounded, size: 18),
+                          label: const Text('Download All'),
+                        ),
+                      ],
                     ),
-                    const Divider(height: 20),
+                    const SizedBox(height: 8),
 
-                    // English TTS Status
-                    _ModelStatusRow(
-                      title: 'TTS Voice — English (VITS)',
-                      isReady: settingsController.isEnTtsReady,
-                      onDownload: () => settingsController.downloadTts('en'),
-                    ),
+                    // 10 Language TTS Rows
+                    ...settingsController.languages.map((lang) {
+                      final isReady = settingsController.isTtsReady(lang.code);
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        child: _ModelStatusRow(
+                          title: '${lang.nativeName} (${lang.englishName})',
+                          isReady: isReady,
+                          onDownload: () => settingsController.downloadTts(lang.code),
+                        ),
+                      );
+                    }),
                     const SizedBox(height: 14),
 
                     // Download state indicator
@@ -128,14 +142,6 @@ class SettingsScreen extends StatelessWidget {
                           ),
                         );
                       }),
-                    ] else if (!settingsController.isSttReady ||
-                        !settingsController.isHiTtsReady ||
-                        !settingsController.isEnTtsReady) ...[
-                      OutlinedButton.icon(
-                        onPressed: () => settingsController.downloadAllEssentials(),
-                        icon: const Icon(Icons.download_rounded),
-                        label: const Text('Download All Essential Models'),
-                      ),
                     ],
                   ],
                 ),
