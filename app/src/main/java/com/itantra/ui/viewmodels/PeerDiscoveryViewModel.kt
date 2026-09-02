@@ -1,5 +1,6 @@
 package com.itantra.ui.viewmodels
 
+import android.net.wifi.p2p.WifiP2pDevice
 import androidx.lifecycle.ViewModel
 import com.itantra.network.WifiDirectManager
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -12,11 +13,19 @@ class PeerDiscoveryViewModel @Inject constructor(
 ) : ViewModel() {
 
     val connectionStatus: StateFlow<String> = wifiDirectManager.connectionStatus
+    val peers: StateFlow<List<WifiP2pDevice>> = wifiDirectManager.peers
     
-    // We can expose the device ID here as well, maybe a placeholder or from settings
-    val deviceId = "ITANTRA_PEER"
+    val deviceId = "ITANTRA_${android.os.Build.MODEL.replace(" ", "_")}"
 
     fun startPeerDiscovery() {
         wifiDirectManager.startDiscovery()
+    }
+
+    fun connectToPeer(device: WifiP2pDevice) {
+        wifiDirectManager.connect(device)
+    }
+
+    fun disconnect() {
+        wifiDirectManager.disconnect()
     }
 }

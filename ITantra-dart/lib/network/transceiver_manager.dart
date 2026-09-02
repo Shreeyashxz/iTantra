@@ -4,12 +4,36 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import '../proto/transceiver_packet.dart';
 
+class PeerLinkStats {
+  final String ipAddress;
+  final int port;
+  final DateTime connectedAt;
+  DateTime lastActivity;
+  int packetsSent;
+  int packetsReceived;
+  int bytesSent;
+  int bytesReceived;
+  int rttMs;
+
+  PeerLinkStats({
+    required this.ipAddress,
+    required this.port,
+    required this.connectedAt,
+    DateTime? lastActivity,
+    this.packetsSent = 0,
+    this.packetsReceived = 0,
+    this.bytesSent = 0,
+    this.bytesReceived = 0,
+    this.rttMs = 0,
+  }) : lastActivity = lastActivity ?? DateTime.now();
+}
+
 class TransceiverManager {
   static const int port = 8888;
 
   ServerSocket? _serverSocket;
-  Socket? _clientSocket;
-  final List<Socket> _activeSockets = [];
+  final Map<String, Socket> _peerSockets = {};
+  final Map<String, PeerLinkStats> _peerStats = {};
 
   final _incomingPacketsController = StreamController<TransceiverPacket>.broadcast();
   Stream<TransceiverPacket> get incomingPackets => _incomingPacketsController.stream;
@@ -17,84 +41,140 @@ class TransceiverManager {
   final _connectionStateController = StreamController<String>.broadcast();
   Stream<String> get connectionState => _connectionStateController.stream;
 
+  final _statsController = StreamController<List<PeerLinkStats>>.broadcast();
+  Stream<List<PeerLinkStats>> get statsStream => _statsController.stream;
+
   bool _isRunning = false;
   bool get isRunning => _isRunning;
 
-  int get connectedPeersCount => _activeSockets.length;
-  List<String> get connectedPeerIps =>
-      _activeSockets.map((s) => s.remoteAddress.address).toSet().toList();
+  int get connectedPeersCount => _peerSockets.length;
+  List<String> get connectedPeerIps => _peerSockets.keys.toList();
+  List<PeerLinkStats> get activePeerStats => _peerStats.values.toList();
+
+  int totalPacketsSent = 0;
+  int totalPacketsReceived = 0;
+
+  Timer? _heartbeatTimer;
 
   void _updateConnectionState() {
-    final count = _activeSockets.length;
+    final count = _peerSockets.length;
     if (count > 0) {
-      final ips = connectedPeerIps.join(', ');
+      final ips = _peerSockets.keys.join(', ');
       _connectionStateController.add('Connected ($count peer${count > 1 ? "s" : ""}: $ips)');
     } else if (_isRunning) {
-      _connectionStateController.add('Listening on port $port');
+      _connectionStateController.add('Listening on port $port (Ready to pair)');
     } else {
       _connectionStateController.add('Disconnected');
     }
+    _statsController.add(activePeerStats);
   }
 
   Future<void> startServer() async {
     if (_serverSocket != null) return;
     try {
-      _serverSocket = await ServerSocket.bind(InternetAddress.anyIPv4, port);
+      _serverSocket = await ServerSocket.bind(InternetAddress.anyIPv4, port, shared: true);
       _isRunning = true;
       _updateConnectionState();
-      debugPrint('Transceiver server listening on port $port');
+      debugPrint('Transceiver server active on 0.0.0.0:$port');
 
       _serverSocket!.listen(
         (socket) {
-          debugPrint('Inbound peer connected from ${socket.remoteAddress.address}:${socket.remotePort}');
-          _handleIncomingConnection(socket);
+          final remoteIp = socket.remoteAddress.address;
+          debugPrint('Inbound connection received from $remoteIp:${socket.remotePort}');
+          _attachSocket(socket, remoteIp);
         },
         onError: (error) {
           debugPrint('Transceiver server error: $error');
           _connectionStateController.add('Server error: $error');
         },
       );
+
+      _startHeartbeat();
     } catch (e) {
-      debugPrint('Failed to start transceiver server: $e');
-      _connectionStateController.add('Server error: $e');
+      debugPrint('Failed to start transceiver server on port $port: $e');
+      _connectionStateController.add('Port $port busy: $e');
     }
   }
 
-  Future<bool> connectToPeer(String ipAddress) async {
-    try {
-      // Don't connect if already connected to this IP
-      final alreadyConnected = _activeSockets.any((s) => s.remoteAddress.address == ipAddress);
-      if (alreadyConnected) {
-        _updateConnectionState();
-        return true;
-      }
+  Future<bool> connectToPeer(String ipAddress, {int targetPort = port}) async {
+    // Avoid self-connection
+    if (ipAddress == '127.0.0.1' || ipAddress == '0.0.0.0') return false;
 
-      final socket = await Socket.connect(ipAddress, port, timeout: const Duration(seconds: 4));
-      _clientSocket = socket;
-      _handleIncomingConnection(socket);
-      debugPrint('Connected outbound to peer at $ipAddress:$port');
+    // Check if already connected
+    if (_peerSockets.containsKey(ipAddress)) {
+      _updateConnectionState();
+      return true;
+    }
+
+    try {
+      final socket = await Socket.connect(
+        ipAddress,
+        targetPort,
+        timeout: const Duration(seconds: 3),
+      );
+      _attachSocket(socket, ipAddress);
+      debugPrint('Outbound connection established to $ipAddress:$targetPort');
       return true;
     } catch (e) {
-      debugPrint('Failed to connect to peer $ipAddress: $e');
-      _connectionStateController.add('Failed to connect to $ipAddress');
+      debugPrint('Failed connecting to peer at $ipAddress:$targetPort: $e');
       return false;
     }
   }
 
-  void _handleIncomingConnection(Socket socket) {
-    _activeSockets.add(socket);
+  void _attachSocket(Socket socket, String ipAddress) {
+    try {
+      socket.setOption(SocketOption.tcpNoDelay, true);
+    } catch (_) {}
+
+    // Close any previous socket for this IP
+    final existing = _peerSockets[ipAddress];
+    if (existing != null && existing != socket) {
+      existing.destroy();
+    }
+
+    _peerSockets[ipAddress] = socket;
+    _peerStats[ipAddress] = PeerLinkStats(
+      ipAddress: ipAddress,
+      port: socket.remotePort,
+      connectedAt: DateTime.now(),
+    );
     _updateConnectionState();
+
     final buffer = BytesBuilder();
 
     socket.listen(
       (data) {
+        final stats = _peerStats[ipAddress];
+        if (stats != null) {
+          stats.bytesReceived += data.length;
+          stats.lastActivity = DateTime.now();
+        }
+
         buffer.add(data);
         var currentBytes = buffer.toBytes();
 
         while (true) {
           final res = TransceiverPacket.parseDelimited(currentBytes);
           if (res.packet != null) {
-            _incomingPacketsController.add(res.packet!);
+            final packet = res.packet!;
+            totalPacketsReceived++;
+            if (stats != null) {
+              stats.packetsReceived++;
+            }
+
+            // Handle ping packet for RTT measurement
+            if (packet.transcript == '__ITANTRA_PING__') {
+              _sendAck(socket, packet.timestampMs);
+            } else if (packet.type == PacketType.ack && packet.transcript.startsWith('PONG:')) {
+              final sentTime = int.tryParse(packet.transcript.substring(5)) ?? 0;
+              if (sentTime > 0 && stats != null) {
+                stats.rttMs = DateTime.now().millisecondsSinceEpoch - sentTime;
+                _statsController.add(activePeerStats);
+              }
+            } else {
+              _incomingPacketsController.add(packet);
+            }
+
             currentBytes = currentBytes.sublist(res.bytesConsumed);
             buffer.clear();
             buffer.add(currentBytes);
@@ -104,53 +184,107 @@ class TransceiverManager {
         }
       },
       onError: (e) {
-        debugPrint('Socket error from ${socket.remoteAddress.address}: $e');
-        _activeSockets.remove(socket);
-        _updateConnectionState();
+        debugPrint('Socket error on $ipAddress: $e');
+        _detachSocket(ipAddress);
       },
       onDone: () {
-        debugPrint('Socket closed: ${socket.remoteAddress.address}');
-        _activeSockets.remove(socket);
-        _updateConnectionState();
+        debugPrint('Socket disconnected from $ipAddress');
+        _detachSocket(ipAddress);
       },
       cancelOnError: true,
     );
   }
 
+  void _detachSocket(String ipAddress) {
+    final socket = _peerSockets.remove(ipAddress);
+    _peerStats.remove(ipAddress);
+    socket?.destroy();
+    _updateConnectionState();
+  }
+
+  void disconnectPeer(String ipAddress) {
+    _detachSocket(ipAddress);
+  }
+
+  void _sendAck(Socket socket, int pingTimestamp) {
+    try {
+      final ackPacket = TransceiverPacket(
+        senderId: 'SYSTEM',
+        transcript: 'PONG:$pingTimestamp',
+        type: PacketType.ack,
+      );
+      ackPacket.writeDelimitedTo(socket);
+      socket.flush();
+    } catch (_) {}
+  }
+
   Future<void> sendPacket(TransceiverPacket packet) async {
-    if (_activeSockets.isEmpty) {
-      debugPrint('No active peer sockets to send packet.');
+    if (_peerSockets.isEmpty) {
+      debugPrint('No connected peers to deliver packet.');
       return;
     }
 
-    for (final socket in List<Socket>.from(_activeSockets)) {
+    final payload = packet.toProtoBytes();
+    totalPacketsSent++;
+
+    for (final entry in Map<String, Socket>.from(_peerSockets).entries) {
+      final ip = entry.key;
+      final socket = entry.value;
       try {
         packet.writeDelimitedTo(socket);
         await socket.flush();
+
+        final stats = _peerStats[ip];
+        if (stats != null) {
+          stats.packetsSent++;
+          stats.bytesSent += payload.length;
+          stats.lastActivity = DateTime.now();
+        }
       } catch (e) {
-        debugPrint('Error writing to socket ${socket.remoteAddress.address}: $e');
-        _activeSockets.remove(socket);
-        _updateConnectionState();
+        debugPrint('Error writing to socket $ip: $e');
+        _detachSocket(ip);
       }
     }
+    _statsController.add(activePeerStats);
+  }
+
+  void _startHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (_peerSockets.isEmpty) return;
+      final pingPacket = TransceiverPacket(
+        senderId: 'SYSTEM',
+        transcript: '__ITANTRA_PING__',
+        type: PacketType.ack,
+        timestampMs: DateTime.now().millisecondsSinceEpoch,
+      );
+      for (final socket in _peerSockets.values) {
+        try {
+          pingPacket.writeDelimitedTo(socket);
+          socket.flush();
+        } catch (_) {}
+      }
+    });
   }
 
   void stop() {
     _isRunning = false;
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
     _serverSocket?.close();
     _serverSocket = null;
-    _clientSocket?.destroy();
-    _clientSocket = null;
-    for (final s in _activeSockets) {
+    for (final s in _peerSockets.values) {
       s.destroy();
     }
-    _activeSockets.clear();
-    _connectionStateController.add('Disconnected');
+    _peerSockets.clear();
+    _peerStats.clear();
+    _updateConnectionState();
   }
 
   void dispose() {
     stop();
     _incomingPacketsController.close();
     _connectionStateController.close();
+    _statsController.close();
   }
 }

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../controllers/transceiver_controller.dart';
 import '../widgets/message_bubble.dart';
 import 'alert_screen.dart';
+import 'peer_discovery_screen.dart';
 
 class TransceiverScreen extends StatefulWidget {
   const TransceiverScreen({super.key});
@@ -94,6 +95,16 @@ class _TransceiverScreenState extends State<TransceiverScreen>
         ),
         actions: [
           IconButton(
+            icon: Icon(
+              isConnected ? Icons.wifi_tethering_rounded : Icons.wifi_find_rounded,
+              color: isConnected ? const Color(0xFF00E676) : null,
+            ),
+            tooltip: 'Wi-Fi Mesh Discovery',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const PeerDiscoveryScreen()),
+            ),
+          ),
+          IconButton(
             icon: const Icon(Icons.warning_amber_rounded),
             color: theme.colorScheme.error,
             tooltip: 'Emergency Alert',
@@ -105,6 +116,31 @@ class _TransceiverScreenState extends State<TransceiverScreen>
       ),
       body: Column(
         children: [
+          // No Mesh Peer Warning Banner
+          if (!isConnected)
+            InkWell(
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const PeerDiscoveryScreen()),
+              ),
+              child: Container(
+                width: double.infinity,
+                color: theme.colorScheme.surfaceContainerHighest,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Row(
+                  children: [
+                    Icon(Icons.wifi_off_rounded, size: 18, color: theme.colorScheme.error),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'No peer linked — Tap to discover & pair over Wi-Fi Mesh',
+                        style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    Icon(Icons.arrow_forward_ios_rounded, size: 12, color: theme.colorScheme.onSurfaceVariant),
+                  ],
+                ),
+              ),
+            ),
           // Active Distress Alert Banner
           if (controller.activeAlert != null)
             Container(

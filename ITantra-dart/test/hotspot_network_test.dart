@@ -1,39 +1,25 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:itantra_dart/network/hotspot_network_manager.dart';
+import 'package:itantra_dart/network/wifi_mesh_manager.dart';
 import 'package:itantra_dart/network/transceiver_manager.dart';
 
 void main() {
-  group('HotspotNetworkManager Tests', () {
+  group('WifiMeshManager Tests', () {
     late TransceiverManager transceiverManager;
-    late HotspotNetworkManager hotspotManager;
+    late WifiMeshManager meshManager;
 
     setUp(() {
       transceiverManager = TransceiverManager();
-      hotspotManager = HotspotNetworkManager(transceiverManager: transceiverManager);
+      meshManager = WifiMeshManager(transceiverManager: transceiverManager);
     });
 
     tearDown(() {
-      hotspotManager.dispose();
+      meshManager.dispose();
+      transceiverManager.dispose();
     });
 
-    test('getSuggestedHotspotHostIp identifies Android hotspot host gateway', () {
-      expect(
-        hotspotManager.getSuggestedHotspotHostIp('192.168.43.14'),
-        equals('192.168.43.1'),
-      );
-      expect(
-        hotspotManager.getSuggestedHotspotHostIp('192.168.1.105'),
-        equals('192.168.1.1'),
-      );
-      expect(
-        hotspotManager.getSuggestedHotspotHostIp(null),
-        equals('192.168.43.1'),
-      );
-    });
-
-    test('HotspotPeer equality and host identification operates properly', () {
+    test('MeshPeer equality and host identification operates properly', () {
       final now = DateTime.now();
-      final peer1 = HotspotPeer(
+      final peer1 = MeshPeer(
         id: 'NODE_01',
         name: 'Alpha Node',
         ipAddress: '192.168.43.1',
@@ -41,7 +27,7 @@ void main() {
         isHost: true,
       );
 
-      final peer2 = HotspotPeer(
+      final peer2 = MeshPeer(
         id: 'NODE_02',
         name: 'Alpha Node Updated',
         ipAddress: '192.168.43.1',
@@ -51,6 +37,28 @@ void main() {
 
       expect(peer1, equals(peer2));
       expect(peer1.isHost, isTrue);
+    });
+
+    test('NetworkInterfaceInfo identifies hotspot and p2p subnets', () {
+      const hotspotIface = NetworkInterfaceInfo(
+        name: 'wlan0',
+        ipAddress: '192.168.43.15',
+        subnetPrefix: '192.168.43',
+        broadcastAddress: '192.168.43.255',
+        isHotspot: true,
+        isP2P: false,
+      );
+      expect(hotspotIface.typeLabel, equals('Mobile Hotspot'));
+
+      const p2pIface = NetworkInterfaceInfo(
+        name: 'p2p-wlan0-0',
+        ipAddress: '192.168.49.2',
+        subnetPrefix: '192.168.49',
+        broadcastAddress: '192.168.49.255',
+        isHotspot: false,
+        isP2P: true,
+      );
+      expect(p2pIface.typeLabel, equals('Wi-Fi Direct P2P'));
     });
   });
 }

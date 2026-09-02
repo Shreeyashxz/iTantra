@@ -1,167 +1,135 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
-import '../network/wifi_direct_manager.dart';
-import '../network/hotspot_network_manager.dart';
-
-enum PeerNetworkMode {
-  wifiDirect,
-  wifiHotspot,
-}
+import '../network/transceiver_manager.dart';
+import '../network/wifi_mesh_manager.dart';
 
 class PeerController extends ChangeNotifier {
-  final WifiDirectManager wifiDirectManager;
-  final HotspotNetworkManager hotspotNetworkManager;
+  final WifiMeshManager meshManager;
+  final TransceiverManager transceiverManager;
 
-  PeerNetworkMode _networkMode = PeerNetworkMode.wifiHotspot;
-  PeerNetworkMode get networkMode => _networkMode;
+  List<MeshPeer> _peers = [];
+  List<MeshPeer> get peers => _peers;
 
-  // Wi-Fi Direct state
-  List<WifiP2pPeer> _peers = [];
-  List<WifiP2pPeer> get peers => _peers;
+  List<NetworkInterfaceInfo> _interfaces = [];
+  List<NetworkInterfaceInfo> get interfaces => _interfaces;
+
+  List<PeerLinkStats> _linkStats = [];
+  List<PeerLinkStats> get linkStats => _linkStats;
 
   String _connectionStatus = 'Disconnected';
   String get connectionStatus => _connectionStatus;
 
-  bool _isDiscovering = false;
-  bool get isDiscovering => _isDiscovering;
+  String get deviceId => meshManager.nodeId;
+  String? get localIp => meshManager.primaryIp;
 
-  // Wi-Fi Hotspot state
-  List<HotspotPeer> _hotspotPeers = [];
-  List<HotspotPeer> get hotspotPeers => _hotspotPeers;
+  bool get isBeaconing => meshManager.isBeaconing;
+  bool get isScanning => meshManager.isScanning;
+  bool get autoConnect => meshManager.autoConnect;
 
-  String? _localIp;
-  String? get localIp => _localIp;
+  List<String> get connectedIps => transceiverManager.connectedPeerIps;
+  int get connectedCount => transceiverManager.connectedPeersCount;
 
-  bool get isHotspotBroadcasting => hotspotNetworkManager.isBroadcasting;
-  bool get isHotspotScanning => hotspotNetworkManager.isScanning;
-
-  final String deviceId = 'ITANTRA_DART_NODE';
-
-  StreamSubscription<List<WifiP2pPeer>>? _peersSubscription;
-  StreamSubscription<String>? _statusSubscription;
-  StreamSubscription<List<HotspotPeer>>? _hotspotPeersSubscription;
-  StreamSubscription<String>? _hotspotStatusSubscription;
+  StreamSubscription<List<MeshPeer>>? _peersSub;
+  StreamSubscription<List<NetworkInterfaceInfo>>? _interfacesSub;
+  StreamSubscription<String>? _statusSub;
+  StreamSubscription<String>? _transceiverStatusSub;
+  StreamSubscription<List<PeerLinkStats>>? _statsSub;
 
   PeerController({
-    required this.wifiDirectManager,
-    required this.hotspotNetworkManager,
+    required this.meshManager,
+    required this.transceiverManager,
   }) {
-    _peers = wifiDirectManager.currentPeers;
-    _connectionStatus = wifiDirectManager.currentStatus;
+    _peers = meshManager.currentPeers;
+    _interfaces = meshManager.activeInterfaces;
+    _connectionStatus = transceiverManager.isRunning ? 'Listening on port 8888' : 'Standby';
 
-    _peersSubscription = wifiDirectManager.peers.listen((peerList) {
-      _peers = peerList;
+    _peersSub = meshManager.peersStream.listen((list) {
+      _peers = list;
       notifyListeners();
     });
 
-    _statusSubscription = wifiDirectManager.connectionStatus.listen((status) {
-      if (_networkMode == PeerNetworkMode.wifiDirect) {
-        _connectionStatus = status;
-        _isDiscovering = wifiDirectManager.isDiscovering;
-        notifyListeners();
-      }
-    });
-
-    _hotspotPeersSubscription = hotspotNetworkManager.discoveredPeers.listen((list) {
-      _hotspotPeers = list;
+    _interfacesSub = meshManager.interfacesStream.listen((list) {
+      _interfaces = list;
       notifyListeners();
     });
 
-    _hotspotStatusSubscription = hotspotNetworkManager.statusStream.listen((status) {
-      if (_networkMode == PeerNetworkMode.wifiHotspot) {
-        _connectionStatus = status;
-        notifyListeners();
-      }
-    });
-
-    // Also listen directly to TransceiverManager socket connection state
-    hotspotNetworkManager.transceiverManager.connectionState.listen((state) {
-      _connectionStatus = state;
+    _statusSub = meshManager.statusStream.listen((status) {
+      _connectionStatus = status;
       notifyListeners();
     });
 
-    _initHotspotState();
+    _transceiverStatusSub = transceiverManager.connectionState.listen((status) {
+      _connectionStatus = status;
+      notifyListeners();
+    });
+
+    _statsSub = transceiverManager.statsStream.listen((stats) {
+      _linkStats = stats;
+      notifyListeners();
+    });
+
+    _init();
   }
 
-  Future<void> _initHotspotState() async {
-    _localIp = await hotspotNetworkManager.getPrimaryIpAddress();
-    await hotspotNetworkManager.startBeaconReceiver();
-    // Auto-broadcast presence beacon so nodes discover each other zero-config
-    await hotspotNetworkManager.startBeaconBroadcaster(
-      nodeId: deviceId,
-      nodeName: 'iTantra Node (${_localIp ?? "WiFi"})',
+  Future<void> _init() async {
+    await meshManager.refreshInterfaces();
+    // Auto-start presence beaconing so devices discover each other out of the box
+    await meshManager.startBeaconService(
+      customNodeName: 'iTantra Node (${localIp ?? "Mesh"})',
     );
     notifyListeners();
   }
 
-  void setNetworkMode(PeerNetworkMode mode) {
-    _networkMode = mode;
-    if (mode == PeerNetworkMode.wifiHotspot) {
-      refreshLocalIp();
-    }
+  void toggleAutoConnect(bool enable) {
+    meshManager.autoConnect = enable;
     notifyListeners();
   }
 
-  Future<void> refreshLocalIp() async {
-    _localIp = await hotspotNetworkManager.getPrimaryIpAddress();
-    notifyListeners();
-  }
-
-  // Wi-Fi Direct actions
-  Future<void> startDiscovery() async {
-    _isDiscovering = true;
-    notifyListeners();
-    await wifiDirectManager.startDiscovery();
-    _isDiscovering = false;
-    notifyListeners();
-  }
-
-  Future<bool> connectToPeer(WifiP2pPeer peer) async {
-    return await wifiDirectManager.connectToPeer(peer);
-  }
-
-  // Hotspot actions
-  Future<void> toggleHotspotBeacon() async {
-    if (hotspotNetworkManager.isBroadcasting) {
-      hotspotNetworkManager.stopBeaconBroadcaster();
+  Future<void> toggleBeacon() async {
+    if (meshManager.isBeaconing) {
+      meshManager.stopBeaconService();
     } else {
-      await hotspotNetworkManager.startBeaconBroadcaster(
-        nodeId: deviceId,
-        nodeName: 'iTantra Node (${_localIp ?? "Mesh"})',
+      await meshManager.startBeaconService(
+        customNodeName: 'iTantra Node (${localIp ?? "Mesh"})',
       );
     }
     notifyListeners();
   }
 
-  Future<void> scanHotspotSubnet() async {
-    await hotspotNetworkManager.scanHotspotSubnet();
+  Future<void> refreshNetwork() async {
+    await meshManager.refreshInterfaces();
     notifyListeners();
   }
 
-  Future<bool> connectToHotspotHost() async {
-    final success = await hotspotNetworkManager.connectToHotspotHost();
-    if (success) {
-      _connectionStatus = 'Connected to Hotspot Host (Base Station)';
-    }
+  Future<void> probeSubnet() async {
+    await meshManager.probeSubnet();
+    notifyListeners();
+  }
+
+  Future<bool> connectToPeer(String ipAddress, {int port = TransceiverManager.port}) async {
+    final success = await meshManager.connectToPeerIp(ipAddress, port: port);
     notifyListeners();
     return success;
   }
 
-  Future<bool> connectToHotspotIp(String ip) async {
-    final success = await hotspotNetworkManager.connectToHotspotPeer(ip);
-    if (success) {
-      _connectionStatus = 'Connected to $ip';
-    }
+  Future<bool> connectToGateway() async {
+    final success = await meshManager.connectToGateway();
     notifyListeners();
     return success;
+  }
+
+  void disconnectPeer(String ipAddress) {
+    transceiverManager.disconnectPeer(ipAddress);
+    notifyListeners();
   }
 
   @override
   void dispose() {
-    _peersSubscription?.cancel();
-    _statusSubscription?.cancel();
-    _hotspotPeersSubscription?.cancel();
-    _hotspotStatusSubscription?.cancel();
+    _peersSub?.cancel();
+    _interfacesSub?.cancel();
+    _statusSub?.cancel();
+    _transceiverStatusSub?.cancel();
+    _statsSub?.cancel();
     super.dispose();
   }
 }

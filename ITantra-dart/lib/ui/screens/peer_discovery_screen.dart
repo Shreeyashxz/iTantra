@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../../controllers/peer_controller.dart';
-import '../../network/hotspot_network_manager.dart';
 
 class PeerDiscoveryScreen extends StatefulWidget {
   const PeerDiscoveryScreen({super.key});
@@ -13,10 +12,12 @@ class PeerDiscoveryScreen extends StatefulWidget {
 
 class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
   final TextEditingController _customIpController = TextEditingController();
+  final TextEditingController _customPortController = TextEditingController(text: '8888');
 
   @override
   void dispose() {
     _customIpController.dispose();
+    _customPortController.dispose();
     super.dispose();
   }
 
@@ -26,19 +27,19 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
       final prefix = localIp.substring(0, localIp.lastIndexOf('.') + 1);
       _customIpController.text = prefix;
     } else {
-      _customIpController.text = '192.168.';
+      _customIpController.text = '192.168.1.';
     }
 
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Connect to IP Address'),
+        title: const Text('Connect to Peer Node'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Enter the Wi-Fi IP of the peer node (Listening on Port 8888):',
+              'Enter the IPv4 address of the target iTantra device:',
               style: TextStyle(fontSize: 13),
             ),
             const SizedBox(height: 12),
@@ -53,6 +54,16 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
                 prefixIcon: Icon(Icons.lan_rounded),
               ),
             ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _customPortController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Port',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.numbers_rounded),
+              ),
+            ),
           ],
         ),
         actions: [
@@ -63,16 +74,17 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
           ElevatedButton(
             onPressed: () async {
               final ip = _customIpController.text.trim();
+              final port = int.tryParse(_customPortController.text.trim()) ?? 8888;
               if (ip.isNotEmpty) {
                 Navigator.pop(ctx);
-                final success = await controller.connectToHotspotIp(ip);
+                final success = await controller.connectToPeer(ip, port: port);
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
                       content: Text(
                         success
-                            ? 'Connected successfully to $ip:8888'
-                            : 'Failed to reach $ip on port 8888',
+                            ? 'Linked successfully to $ip:$port'
+                            : 'Could not reach $ip on port $port',
                       ),
                       backgroundColor: success ? Colors.green : Colors.red,
                     ),
@@ -92,18 +104,16 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
     final theme = Theme.of(context);
     final controller = context.watch<PeerController>();
 
-    final isConnected = controller.connectionStatus.toLowerCase().contains('connect') &&
-        !controller.connectionStatus.toLowerCase().contains('failed') &&
-        !controller.connectionStatus.toLowerCase().contains('disconnect');
+    final isConnected = controller.connectedCount > 0;
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Wi-Fi Mesh & Peer Discovery'),
         actions: [
           IconButton(
-            tooltip: 'Refresh Local Network IP',
+            tooltip: 'Refresh Network Interfaces',
             icon: const Icon(Icons.refresh_rounded),
-            onPressed: () => controller.refreshLocalIp(),
+            onPressed: () => controller.refreshNetwork(),
           ),
         ],
       ),
@@ -112,36 +122,15 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Network Mode Segmented Button
-            SegmentedButton<PeerNetworkMode>(
-              segments: const [
-                ButtonSegment(
-                  value: PeerNetworkMode.wifiHotspot,
-                  icon: Icon(Icons.wifi_rounded),
-                  label: Text('Wi-Fi LAN / Hotspot'),
-                ),
-                ButtonSegment(
-                  value: PeerNetworkMode.wifiDirect,
-                  icon: Icon(Icons.perm_scan_wifi_rounded),
-                  label: Text('Wi-Fi Direct P2P'),
-                ),
-              ],
-              selected: {controller.networkMode},
-              onSelectionChanged: (selected) {
-                controller.setNetworkMode(selected.first);
-              },
-            ),
-            const SizedBox(height: 16),
-
-            // Connection Status & Device IP Card
+            // Local Node & Interface Status Card
             Card(
               color: isConnected
-                  ? const Color(0xFF1B5E20).withAlpha(40)
-                  : theme.colorScheme.primaryContainer,
+                  ? const Color(0xFF1B5E20).withAlpha(35)
+                  : theme.colorScheme.surfaceContainerHighest,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(14),
                 side: BorderSide(
-                  color: isConnected ? Colors.green : theme.colorScheme.primary.withAlpha(50),
+                  color: isConnected ? Colors.green : theme.colorScheme.outlineVariant,
                 ),
               ),
               child: Padding(
@@ -156,40 +145,32 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
                           children: [
                             Icon(
                               isConnected
-                                  ? Icons.check_circle_rounded
-                                  : (controller.networkMode == PeerNetworkMode.wifiHotspot
-                                      ? Icons.wifi_rounded
-                                      : Icons.radar_rounded),
-                              color: isConnected
-                                  ? Colors.green
-                                  : theme.colorScheme.onPrimaryContainer,
+                                  ? Icons.hub_rounded
+                                  : Icons.sensors_rounded,
+                              color: isConnected ? Colors.green : theme.colorScheme.primary,
                             ),
                             const SizedBox(width: 8),
                             Text(
-                              controller.networkMode == PeerNetworkMode.wifiHotspot
-                                  ? 'Local Wi-Fi Mesh'
-                                  : 'Wi-Fi Direct Link',
+                              'iTantra Transceiver Mesh',
                               style: theme.textTheme.titleMedium?.copyWith(
-                                color: isConnected
-                                    ? Colors.green.shade800
-                                    : theme.colorScheme.onPrimaryContainer,
                                 fontWeight: FontWeight.bold,
+                                color: isConnected ? Colors.green.shade800 : null,
                               ),
                             ),
                           ],
                         ),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                           decoration: BoxDecoration(
-                            color: isConnected
-                                ? Colors.green
-                                : theme.colorScheme.surfaceContainerHighest,
+                            color: isConnected ? Colors.green : theme.colorScheme.primaryContainer,
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: Text(
-                            isConnected ? 'ONLINE' : 'STANDBY',
+                            isConnected
+                                ? '${controller.connectedCount} LINKED'
+                                : 'STANDBY',
                             style: TextStyle(
-                              color: isConnected ? Colors.white : theme.colorScheme.onSurfaceVariant,
+                              color: isConnected ? Colors.white : theme.colorScheme.onPrimaryContainer,
                               fontSize: 11,
                               fontWeight: FontWeight.bold,
                             ),
@@ -204,22 +185,51 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
                         fontWeight: FontWeight.w600,
                       ),
                     ),
+                    const SizedBox(height: 8),
+
+                    // Active Interfaces List
+                    if (controller.interfaces.isNotEmpty) ...[
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 4,
+                        children: controller.interfaces.map((iface) {
+                          return Chip(
+                            visualDensity: VisualDensity.compact,
+                            avatar: Icon(
+                              iface.isHotspot
+                                  ? Icons.wifi_tethering_rounded
+                                  : (iface.isP2P ? Icons.devices_rounded : Icons.wifi_rounded),
+                              size: 16,
+                            ),
+                            label: Text(
+                              '${iface.name}: ${iface.ipAddress} (${iface.typeLabel})',
+                              style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ] else ...[
+                      Text(
+                        'Scanning local network interfaces...',
+                        style: theme.textTheme.bodySmall?.copyWith(fontStyle: FontStyle.italic),
+                      ),
+                    ],
+
                     const SizedBox(height: 6),
-                    if (controller.localIp != null) ...[
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              'Device IP: ${controller.localIp} (Port 8888)',
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                fontFamily: 'monospace',
-                                fontWeight: FontWeight.bold,
-                              ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Node ID: ${controller.deviceId} • Port: 8888 • Beacon: 8889',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
                             ),
                           ),
+                        ),
+                        if (controller.localIp != null)
                           IconButton(
                             icon: const Icon(Icons.copy_rounded, size: 16),
-                            tooltip: 'Copy IP',
+                            tooltip: 'Copy Primary IP',
                             visualDensity: VisualDensity.compact,
                             onPressed: () {
                               Clipboard.setData(ClipboardData(text: controller.localIp!));
@@ -231,22 +241,7 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
                               );
                             },
                           ),
-                        ],
-                      ),
-                    ] else ...[
-                      Text(
-                        'Device IP: Detecting local network...',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                          fontStyle: FontStyle.italic,
-                        ),
-                      ),
-                    ],
-                    Text(
-                      'Node ID: ${controller.deviceId}',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
+                      ],
                     ),
                   ],
                 ),
@@ -254,339 +249,324 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
             ),
             const SizedBox(height: 16),
 
-            // Mode-specific controls
-            if (controller.networkMode == PeerNetworkMode.wifiHotspot) ...[
-              _buildHotspotControls(context, theme, controller),
-            ] else ...[
-              _buildWifiDirectControls(context, theme, controller),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildHotspotControls(
-    BuildContext context,
-    ThemeData theme,
-    PeerController controller,
-  ) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // Quick Action Row: Connect by Custom IP + Gateway Quick Connect
-        Row(
-          children: [
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: () => _showManualConnectDialog(context, controller),
-                icon: const Icon(Icons.link_rounded, size: 20),
-                label: const Text('CONNECT BY IP'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: theme.colorScheme.primary,
-                  foregroundColor: theme.colorScheme.onPrimary,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                ),
+            // Controls: Auto-Connect Toggle & Beacon Status
+            Card(
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: BorderSide(color: theme.colorScheme.outlineVariant),
               ),
-            ),
-            const SizedBox(width: 8),
-            OutlinedButton.icon(
-              onPressed: () async {
-                final ok = await controller.connectToHotspotHost();
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        ok
-                            ? 'Connected to Gateway Host'
-                            : 'Could not reach Gateway Host on port 8888',
-                      ),
-                      backgroundColor: ok ? Colors.green : Colors.red,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Mesh Auto-Connect',
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        Text(
+                          'Automatically pair when nodes are detected',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
                     ),
-                  );
-                }
-              },
-              icon: const Icon(Icons.router_rounded, size: 18),
-              label: const Text('GATEWAY / AP'),
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    Switch(
+                      value: controller.autoConnect,
+                      onChanged: (val) => controller.toggleAutoConnect(val),
+                    ),
+                  ],
+                ),
               ),
             ),
-          ],
-        ),
-        const SizedBox(height: 12),
+            const SizedBox(height: 12),
 
-        // Auto-Beacon and Subnet Scan Controls
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: () => controller.toggleHotspotBeacon(),
-                icon: Icon(
-                  controller.isHotspotBroadcasting
-                      ? Icons.sensors_rounded
-                      : Icons.sensors_off_rounded,
-                  color: controller.isHotspotBroadcasting ? Colors.green : null,
-                ),
-                label: Text(
-                  controller.isHotspotBroadcasting
-                      ? 'BEACON: BROADCASTING'
-                      : 'ENABLE BEACON',
-                ),
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: controller.isHotspotScanning
-                    ? null
-                    : () => controller.scanHotspotSubnet(),
-                icon: controller.isHotspotScanning
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.manage_search_rounded),
-                label: Text(
-                  controller.isHotspotScanning ? 'PROBING...' : 'PROBE SUBNET',
-                ),
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 20),
-
-        // Section header
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(
-              'Discovered Wi-Fi Nodes (${controller.hotspotPeers.length})',
-              style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
-            ),
-            if (controller.hotspotPeers.isNotEmpty)
-              Text(
-                'Auto-discovered via UDP:8889',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-          ],
-        ),
-        const SizedBox(height: 8),
-
-        if (controller.hotspotPeers.isEmpty) ...[
-          Container(
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              border: Border.all(color: theme.colorScheme.outlineVariant),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Column(
+            // Action Buttons: Probe Subnet + Connect by IP + Gateway
+            Row(
               children: [
-                Icon(
-                  Icons.wifi_find_rounded,
-                  size: 44,
-                  color: theme.colorScheme.onSurfaceVariant.withAlpha(150),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  'No other iTantra devices detected on this Wi-Fi.',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: controller.isScanning ? null : () => controller.probeSubnet(),
+                    icon: controller.isScanning
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.radar_rounded),
+                    label: Text(controller.isScanning ? 'SWEEPING...' : 'SWEEP SUBNET'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: theme.colorScheme.primary,
+                      foregroundColor: theme.colorScheme.onPrimary,
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
                   ),
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: () => _showManualConnectDialog(context, controller),
+                  icon: const Icon(Icons.link_rounded, size: 20),
+                  label: const Text('CUSTOM IP'),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 13, horizontal: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton.filledTonal(
+                  tooltip: 'Connect to Wi-Fi Gateway / Host AP (.1)',
+                  icon: const Icon(Icons.router_rounded),
+                  onPressed: () async {
+                    final ok = await controller.connectToGateway();
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            ok
+                                ? 'Connected to Gateway / Base Station'
+                                : 'Could not reach Gateway host on port 8888',
+                          ),
+                          backgroundColor: ok ? Colors.green : Colors.red,
+                        ),
+                      );
+                    }
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+
+            // Connected Peers Telemetry Section
+            if (controller.connectedCount > 0) ...[
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Active Mesh Links (${controller.connectedCount})',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.green.shade800,
+                    ),
+                  ),
+                  const Text(
+                    'Ready for Push-To-Talk',
+                    style: TextStyle(fontSize: 12, color: Colors.green, fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              ListView.separated(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: controller.connectedIps.length,
+                separatorBuilder: (context, index) => const SizedBox(height: 8),
+                itemBuilder: (context, index) {
+                  final ip = controller.connectedIps[index];
+                  final stats = controller.linkStats.where((s) => s.ipAddress == ip).firstOrNull;
+
+                  return Card(
+                    elevation: 1,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: const BorderSide(color: Colors.green, width: 1.5),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Row(
+                        children: [
+                          const CircleAvatar(
+                            backgroundColor: Color(0xFF1B5E20),
+                            child: Icon(Icons.wifi_tethering_rounded, color: Colors.white),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Linked Peer: $ip',
+                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                                ),
+                                const SizedBox(height: 4),
+                                Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: Colors.green.withAlpha(40),
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: Text(
+                                        stats != null && stats.rttMs > 0
+                                            ? '⚡ ${stats.rttMs} ms'
+                                            : '⚡ Active',
+                                        style: const TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.green,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      stats != null
+                                          ? 'Sent: ${stats.packetsSent} • Recv: ${stats.packetsReceived}'
+                                          : 'Link active',
+                                      style: theme.textTheme.bodySmall?.copyWith(
+                                        color: theme.colorScheme.onSurfaceVariant,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                          OutlinedButton(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.red,
+                              side: const BorderSide(color: Colors.red),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            onPressed: () => controller.disconnectPeer(ip),
+                            child: const Text('Unlink'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 20),
+            ],
+
+            // Discovered Nodes Section
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
                 Text(
-                  '• Ensure both devices are connected to the same Wi-Fi router or Mobile Hotspot.\n'
-                  '• UDP Beacons broadcast automatically in the background.\n'
-                  '• If your router restricts broadcasts, tap "PROBE SUBNET" or enter the IP directly with "CONNECT BY IP".',
-                  textAlign: TextAlign.start,
+                  'Discovered Nearby Nodes (${controller.peers.length})',
+                  style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                ),
+                Text(
+                  controller.isBeaconing ? 'Beaconing (UDP+Multicast)' : 'Beacon Inactive',
                   style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                    height: 1.5,
+                    color: controller.isBeaconing ? Colors.green : theme.colorScheme.outline,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ],
             ),
-          ),
-        ] else ...[
-          ListView.separated(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: controller.hotspotPeers.length,
-            separatorBuilder: (context, index) => const SizedBox(height: 8),
-            itemBuilder: (context, index) {
-              final peer = controller.hotspotPeers[index];
-              return _buildHotspotPeerCard(context, theme, controller, peer);
-            },
-          ),
-        ],
-      ],
-    );
-  }
+            const SizedBox(height: 8),
 
-  Widget _buildHotspotPeerCard(
-    BuildContext context,
-    ThemeData theme,
-    PeerController controller,
-    HotspotPeer peer,
-  ) {
-    final secondsAgo = DateTime.now().difference(peer.lastSeen).inSeconds;
-
-    return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: theme.colorScheme.outlineVariant),
-      ),
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: peer.isHost
-              ? theme.colorScheme.primaryContainer
-              : theme.colorScheme.secondaryContainer,
-          child: Icon(
-            peer.isHost ? Icons.router_rounded : Icons.phone_android_rounded,
-            color: peer.isHost
-                ? theme.colorScheme.onPrimaryContainer
-                : theme.colorScheme.onSecondaryContainer,
-          ),
-        ),
-        title: Text(
-          peer.name,
-          style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
-        ),
-        subtitle: Text(
-          '${peer.ipAddress}:${peer.port} • Seen ${secondsAgo}s ago',
-          style: theme.textTheme.bodySmall?.copyWith(
-            fontFamily: 'monospace',
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-        ),
-        trailing: ElevatedButton(
-          onPressed: () async {
-            final ok = await controller.connectToHotspotIp(peer.ipAddress);
-            if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(ok ? 'Connected to ${peer.name}' : 'Connection failed to ${peer.ipAddress}'),
-                  backgroundColor: ok ? Colors.green : Colors.red,
+            if (controller.peers.isEmpty) ...[
+              Container(
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  border: Border.all(color: theme.colorScheme.outlineVariant),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-              );
-            }
-          },
-          child: const Text('Connect'),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildWifiDirectControls(
-    BuildContext context,
-    ThemeData theme,
-    PeerController controller,
-  ) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        ElevatedButton.icon(
-          onPressed: controller.isDiscovering ? null : () => controller.startDiscovery(),
-          icon: const Icon(Icons.radar_rounded),
-          label: Text(
-            controller.isDiscovering
-                ? 'SCANNING WI-FI DIRECT GROUP...'
-                : 'SCAN WI-FI DIRECT P2P SUBNET',
-          ),
-          style: ElevatedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 14),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          ),
-        ),
-        const SizedBox(height: 16),
-
-        Text(
-          'Active Wi-Fi Direct Peers (${controller.peers.length})',
-          style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 8),
-
-        if (controller.peers.isEmpty)
-          Container(
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              border: Border.all(color: theme.colorScheme.outlineVariant),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Center(
-              child: Text(
-                'No active Wi-Fi Direct P2P peers found.\n\nTip: For instant cross-device connectivity across phones and PCs, use the "Wi-Fi LAN / Hotspot" mode.',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
+                child: Column(
+                  children: [
+                    Icon(
+                      Icons.wifi_find_rounded,
+                      size: 48,
+                      color: theme.colorScheme.primary.withAlpha(160),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'No other iTantra devices detected on this network.',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      '• Connect devices to the same Wi-Fi router, Mobile Hotspot, or Wi-Fi Direct group.\n'
+                      '• Presence beacons broadcast automatically via UDP and Multicast.\n'
+                      '• Tap "SWEEP SUBNET" for an immediate network probe, or connect manually via "CUSTOM IP".',
+                      textAlign: TextAlign.start,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        height: 1.5,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ),
-          )
-        else
-          ListView.separated(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: controller.peers.length,
-            separatorBuilder: (context, index) => const SizedBox(height: 8),
-            itemBuilder: (context, index) {
-              final peer = controller.peers[index];
-              final isConnected = peer.status == 0;
+            ] else ...[
+              ListView.separated(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: controller.peers.length,
+                separatorBuilder: (context, index) => const SizedBox(height: 8),
+                itemBuilder: (context, index) {
+                  final peer = controller.peers[index];
+                  final isPeerConnected = controller.connectedIps.contains(peer.ipAddress);
+                  final secondsAgo = DateTime.now().difference(peer.lastSeen).inSeconds;
 
-              return Card(
-                elevation: 0,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  side: BorderSide(
-                    color: isConnected
-                        ? theme.colorScheme.primary
-                        : theme.colorScheme.outlineVariant,
-                  ),
-                ),
-                child: ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor: isConnected
-                        ? theme.colorScheme.primaryContainer
-                        : theme.colorScheme.surfaceContainerHighest,
-                    child: Icon(
-                      isConnected ? Icons.wifi_tethering_rounded : Icons.device_hub_rounded,
-                      color: isConnected
-                          ? theme.colorScheme.onPrimaryContainer
-                          : theme.colorScheme.onSurfaceVariant,
+                  return Card(
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: BorderSide(
+                        color: isPeerConnected ? Colors.green : theme.colorScheme.outlineVariant,
+                      ),
                     ),
-                  ),
-                  title: Text(
-                    peer.deviceName,
-                    style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
-                  ),
-                  subtitle: Text(
-                    'IP: ${peer.deviceAddress} • ${isConnected ? "Connected" : "Available"}',
-                    style: theme.textTheme.bodySmall,
-                  ),
-                  trailing: ElevatedButton(
-                    onPressed: isConnected ? null : () => controller.connectToPeer(peer),
-                    child: Text(isConnected ? 'Linked' : 'Connect'),
-                  ),
-                ),
-              );
-            },
-          ),
-      ],
+                    child: ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: isPeerConnected
+                            ? Colors.green.withAlpha(40)
+                            : theme.colorScheme.primaryContainer,
+                        child: Icon(
+                          peer.isHost ? Icons.router_rounded : Icons.phone_android_rounded,
+                          color: isPeerConnected ? Colors.green : theme.colorScheme.onPrimaryContainer,
+                        ),
+                      ),
+                      title: Text(
+                        peer.name,
+                        style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                      subtitle: Text(
+                        '${peer.ipAddress}:${peer.port} • ${peer.networkType} • Seen ${secondsAgo}s ago',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          fontFamily: 'monospace',
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                      trailing: isPeerConnected
+                          ? const Chip(
+                              label: Text('LINKED', style: TextStyle(fontSize: 10, color: Colors.green)),
+                              visualDensity: VisualDensity.compact,
+                              side: BorderSide(color: Colors.green),
+                            )
+                          : ElevatedButton(
+                              onPressed: () async {
+                                final ok = await controller.connectToPeer(peer.ipAddress, port: peer.port);
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(ok ? 'Connected to ${peer.name}' : 'Connection failed to ${peer.ipAddress}'),
+                                      backgroundColor: ok ? Colors.green : Colors.red,
+                                    ),
+                                  );
+                                }
+                              },
+                              child: const Text('Connect'),
+                            ),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }

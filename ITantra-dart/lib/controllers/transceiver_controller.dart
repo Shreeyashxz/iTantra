@@ -6,7 +6,7 @@ import '../alerts/alert_receiver.dart';
 import '../data/app_database.dart';
 import '../data/entities/message_entity.dart';
 import '../network/transceiver_manager.dart';
-import '../network/wifi_direct_manager.dart';
+import '../network/wifi_mesh_manager.dart';
 import '../proto/transceiver_packet.dart';
 import '../speech/comm_pipeline.dart';
 import '../speech/sherpa_onnx_speech_engine.dart';
@@ -14,7 +14,7 @@ import '../speech/sherpa_onnx_speech_engine.dart';
 class TransceiverController extends ChangeNotifier {
   final CommPipeline commPipeline;
   final TransceiverManager transceiverManager;
-  final WifiDirectManager wifiDirectManager;
+  final WifiMeshManager meshManager;
   final AlertBroadcaster alertBroadcaster;
   final AlertReceiver alertReceiver;
   final SherpaOnnxSpeechEngine speechEngine;
@@ -44,7 +44,7 @@ class TransceiverController extends ChangeNotifier {
   TransceiverController({
     required this.commPipeline,
     required this.transceiverManager,
-    required this.wifiDirectManager,
+    required this.meshManager,
     required this.alertBroadcaster,
     required this.alertReceiver,
     required this.speechEngine,
@@ -174,7 +174,7 @@ class TransceiverController extends ChangeNotifier {
   }
 
   void startPeerDiscovery() {
-    wifiDirectManager.startDiscovery();
+    meshManager.probeSubnet();
   }
 
   @override

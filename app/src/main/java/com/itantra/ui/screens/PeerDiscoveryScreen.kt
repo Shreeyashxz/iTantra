@@ -26,6 +26,7 @@ fun PeerDiscoveryScreen(
     viewModel: PeerDiscoveryViewModel = hiltViewModel()
 ) {
     val connectionStatus by viewModel.connectionStatus.collectAsState()
+    val peers by viewModel.peers.collectAsState()
 
     Scaffold(
         topBar = {
@@ -87,20 +88,71 @@ fun PeerDiscoveryScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            Text("Discovered Peers", style = MaterialTheme.typography.titleMedium)
+            Text("Discovered Peers (${peers.size})", style = MaterialTheme.typography.titleMedium)
             Spacer(modifier = Modifier.height(8.dp))
 
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    "No peers detected in local Wi-Fi Direct mesh.\nTap scan while another iTantra device is nearby.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.outline
-                )
+            if (peers.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "No peers detected in local Wi-Fi Direct mesh.\nTap SCAN while another iTantra device is nearby.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(peers) { peer ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = peer.deviceName.ifEmpty { "Unknown iTantra Device" },
+                                        style = MaterialTheme.typography.titleSmall
+                                    )
+                                    Text(
+                                        text = peer.deviceAddress,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.outline
+                                    )
+                                    val statusText = when (peer.status) {
+                                        WifiP2pDevice.CONNECTED -> "Connected"
+                                        WifiP2pDevice.INVITED -> "Invited"
+                                        WifiP2pDevice.FAILED -> "Failed"
+                                        WifiP2pDevice.AVAILABLE -> "Available"
+                                        else -> "Unavailable"
+                                    }
+                                    Text(
+                                        text = "Status: $statusText",
+                                        style = MaterialTheme.typography.labelSmall
+                                    )
+                                }
+                                Button(
+                                    onClick = { viewModel.connectToPeer(peer) },
+                                    enabled = peer.status == WifiP2pDevice.AVAILABLE
+                                ) {
+                                    Text(if (peer.status == WifiP2pDevice.CONNECTED) "Linked" else "Connect")
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

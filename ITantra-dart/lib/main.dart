@@ -12,8 +12,7 @@ import 'controllers/settings_controller.dart';
 import 'controllers/transceiver_controller.dart';
 import 'data/app_database.dart';
 import 'network/transceiver_manager.dart';
-import 'network/wifi_direct_manager.dart';
-import 'network/hotspot_network_manager.dart';
+import 'network/wifi_mesh_manager.dart';
 import 'speech/audio_recorder_service.dart';
 import 'speech/comm_pipeline.dart';
 import 'speech/language_pack_manager.dart';
@@ -37,8 +36,7 @@ void main() async {
   final vadEngine = SileroVadEngine();
   final speechEngine = SherpaOnnxSpeechEngine(languagePackManager: languagePackManager);
   final transceiverManager = TransceiverManager();
-  final wifiDirectManager = WifiDirectManager(transceiverManager: transceiverManager);
-  final hotspotNetworkManager = HotspotNetworkManager(transceiverManager: transceiverManager);
+  final meshManager = WifiMeshManager(transceiverManager: transceiverManager);
   final alertBroadcaster = AlertBroadcaster(transceiverManager: transceiverManager);
   final alertReceiver = AlertReceiver(
     transceiverManager: transceiverManager,
@@ -58,7 +56,7 @@ void main() async {
           create: (_) => TransceiverController(
             commPipeline: commPipeline,
             transceiverManager: transceiverManager,
-            wifiDirectManager: wifiDirectManager,
+            meshManager: meshManager,
             alertBroadcaster: alertBroadcaster,
             alertReceiver: alertReceiver,
             speechEngine: speechEngine,
@@ -73,8 +71,8 @@ void main() async {
         ),
         ChangeNotifierProvider(
           create: (_) => PeerController(
-            wifiDirectManager: wifiDirectManager,
-            hotspotNetworkManager: hotspotNetworkManager,
+            meshManager: meshManager,
+            transceiverManager: transceiverManager,
           ),
         ),
         ChangeNotifierProvider(
