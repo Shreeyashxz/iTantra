@@ -2,8 +2,9 @@ package com.itantra.speech
 
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
@@ -12,12 +13,19 @@ import java.net.URL
 import javax.inject.Inject
 import javax.inject.Singleton
 
+sealed class DownloadState {
+    object Idle : DownloadState()
+    data class Downloading(val item: String, val progressPercent: Int) : DownloadState()
+    data class Completed(val message: String) : DownloadState()
+    data class Error(val message: String) : DownloadState()
+}
+
 @Singleton
 class LanguagePackManager @Inject constructor(
     private val context: Context
 ) {
-    private val _downloadProgress = MutableStateFlow<Map<String, Float>>(emptyMap())
-    val downloadProgress: Flow<Map<String, Float>> = _downloadProgress
+    private val _downloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
+    val downloadState: StateFlow<DownloadState> = _downloadState.asStateFlow()
 
     fun getModelsDirectory(): File {
         val dir = File(context.getExternalFilesDir(null), "models")
@@ -27,68 +35,174 @@ class LanguagePackManager @Inject constructor(
         return dir
     }
 
-    suspend fun downloadLanguagePack(languageCode: String, onComplete: (Boolean) -> Unit) = withContext(Dispatchers.IO) {
-        // Placeholder URLs for the actual STT and TTS models
-        // In a real scenario, these would point to HuggingFace or your backend CDN
-        val sttUrl = "https://example.com/models/stt_indicconformer.onnx"
-        val ttsUrl = "https://example.com/models/tts_vits_$languageCode.onnx"
-        
-        val modelsDir = getModelsDirectory()
-        
-        try {
-            val sttFile = File(modelsDir, "stt/encoder.onnx")
-            if (!sttFile.exists()) {
-                sttFile.parentFile?.mkdirs()
-                downloadFile(sttUrl, sttFile) { progress ->
-                    updateProgress("STT", progress)
-                }
-            }
+    fun isSttAvailable(): Boolean {
+        val dir = getModelsDirectory()
+        val enc = File(dir, "stt/encoder.onnx")
+        val dec = File(dir, "stt/decoder.onnx")
+        val join = File(dir, "stt/joiner.onnx")
+        val tokens = File(dir, "stt/tokens.txt")
+        return enc.exists() && dec.exists() && join.exists() && tokens.exists()
+    }
 
-            val ttsFile = File(modelsDir, "tts/$languageCode/vits.onnx")
-            if (!ttsFile.exists()) {
-                ttsFile.parentFile?.mkdirs()
-                downloadFile(ttsUrl, ttsFile) { progress ->
-                    updateProgress("TTS_$languageCode", progress)
+    fun isTtsAvailable(languageCode: String): Boolean {
+        val dir = getModelsDirectory()
+        val model = File(dir, "tts/$languageCode/vits.onnx")
+        val tokens = File(dir, "tts/$languageCode/tokens.txt")
+        return model.exists() && tokens.exists()
+    }
+
+    suspend fun downloadStt(): Boolean = withContext(Dispatchers.IO) {
+        val modelsDir = getModelsDirectory()
+        val sttDir = File(modelsDir, "stt").apply { mkdirs() }
+
+        val baseUrl = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26/resolve/main"
+        val files = listOf(
+            "encoder-epoch-99-avg-1.int8.onnx" to "encoder.onnx",
+            "decoder-epoch-99-avg-1.int8.onnx" to "decoder.onnx",
+            "joiner-epoch-99-avg-1.int8.onnx" to "joiner.onnx",
+            "tokens.txt" to "tokens.txt"
+        )
+
+        try {
+            for ((remote, local) in files) {
+                val targetFile = File(sttDir, local)
+                if (!targetFile.exists() || targetFile.length() == 0L) {
+                    _downloadState.value = DownloadState.Downloading("STT ($local)", 0)
+                    downloadFileWithRedirects("$baseUrl/$remote", targetFile) { percent ->
+                        _downloadState.value = DownloadState.Downloading("STT ($local)", percent)
+                    }
                 }
             }
-            onComplete(true)
+            _downloadState.value = DownloadState.Completed("STT Model Downloaded Successfully")
+            true
         } catch (e: Exception) {
             e.printStackTrace()
-            onComplete(false)
+            _downloadState.value = DownloadState.Error("STT Download failed: ${e.localizedMessage}")
+            false
         }
     }
 
-    private fun updateProgress(key: String, progress: Float) {
-        val current = _downloadProgress.value.toMutableMap()
-        current[key] = progress
-        _downloadProgress.value = current
-    }
+    suspend fun downloadTts(languageCode: String): Boolean = withContext(Dispatchers.IO) {
+        val modelsDir = getModelsDirectory()
+        val ttsDir = File(modelsDir, "tts/$languageCode").apply { mkdirs() }
 
-    private fun downloadFile(urlStr: String, destination: File, onProgress: (Float) -> Unit) {
-        val url = URL(urlStr)
-        val connection = url.openConnection() as HttpURLConnection
-        connection.connect()
-
-        if (connection.responseCode != HttpURLConnection.HTTP_OK) {
-            throw Exception("Server returned HTTP ${connection.responseCode}")
+        val (baseUrl, modelFile) = when (languageCode) {
+            "hi" -> Pair(
+                "https://huggingface.co/csukuangfj/vits-piper-hi_IN-pratham-medium/resolve/main",
+                "hi_IN-pratham-medium.onnx"
+            )
+            else -> Pair(
+                "https://huggingface.co/csukuangfj/vits-piper-en_US-amy-low/resolve/main",
+                "en_US-amy-low.onnx"
+            )
         }
 
-        val fileLength = connection.contentLength
-        val input = connection.inputStream
-        val output = FileOutputStream(destination)
+        try {
+            val targetModel = File(ttsDir, "vits.onnx")
+            val targetTokens = File(ttsDir, "tokens.txt")
+            val targetLexicon = File(ttsDir, "lexicon.txt")
 
-        val data = ByteArray(4096)
-        var total: Long = 0
-        var count: Int
-        while (input.read(data).also { count = it } != -1) {
-            total += count.toLong()
-            if (fileLength > 0) {
-                onProgress((total * 100 / fileLength).toFloat())
+            if (!targetModel.exists() || targetModel.length() == 0L) {
+                _downloadState.value = DownloadState.Downloading("TTS $languageCode (voice)", 0)
+                downloadFileWithRedirects("$baseUrl/$modelFile", targetModel) { percent ->
+                    _downloadState.value = DownloadState.Downloading("TTS $languageCode (voice)", percent)
+                }
             }
-            output.write(data, 0, count)
+
+            if (!targetTokens.exists() || targetTokens.length() == 0L) {
+                _downloadState.value = DownloadState.Downloading("TTS $languageCode (tokens)", 0)
+                downloadFileWithRedirects("$baseUrl/tokens.txt", targetTokens) { percent ->
+                    _downloadState.value = DownloadState.Downloading("TTS $languageCode (tokens)", percent)
+                }
+            }
+
+            // Create empty lexicon if none is needed by Piper
+            if (!targetLexicon.exists()) {
+                targetLexicon.writeText("")
+            }
+
+            _downloadState.value = DownloadState.Completed("TTS for $languageCode Ready")
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            _downloadState.value = DownloadState.Error("TTS Download failed: ${e.localizedMessage}")
+            false
         }
-        output.flush()
-        output.close()
-        input.close()
+    }
+
+    suspend fun downloadAllEssentials(onComplete: (Boolean) -> Unit) {
+        val sttOk = downloadStt()
+        val ttsHiOk = downloadTts("hi")
+        val ttsEnOk = downloadTts("en")
+        onComplete(sttOk && ttsHiOk && ttsEnOk)
+    }
+
+    private fun downloadFileWithRedirects(
+        urlStr: String,
+        destination: File,
+        onProgress: (Int) -> Unit
+    ) {
+        var currentUrl = urlStr
+        var connection: HttpURLConnection? = null
+        var redirects = 0
+        val maxRedirects = 8
+
+        while (redirects < maxRedirects) {
+            val url = URL(currentUrl)
+            connection = url.openConnection() as HttpURLConnection
+            connection.instanceFollowRedirects = false
+            connection.connectTimeout = 15000
+            connection.readTimeout = 30000
+            connection.setRequestProperty("User-Agent", "iTantra-Android/1.0")
+
+            val status = connection.responseCode
+            if (status == HttpURLConnection.HTTP_MOVED_TEMP ||
+                status == HttpURLConnection.HTTP_MOVED_PERM ||
+                status == 307 || status == 308 || status == 303
+            ) {
+                val newUrl = connection.getHeaderField("Location")
+                currentUrl = if (newUrl.startsWith("http")) newUrl else URL(url, newUrl).toString()
+                redirects++
+                connection.disconnect()
+                continue
+            }
+
+            if (status != HttpURLConnection.HTTP_OK) {
+                throw Exception("Server returned HTTP $status for $currentUrl")
+            }
+            break
+        }
+
+        val conn = connection ?: throw Exception("Failed to establish connection")
+        val fileLength = conn.contentLength
+        val tempFile = File(destination.parentFile, "${destination.name}.tmp")
+
+        conn.inputStream.use { input ->
+            FileOutputStream(tempFile).use { output ->
+                val data = ByteArray(8192)
+                var total: Long = 0
+                var count: Int
+                var lastReported = -1
+
+                while (input.read(data).also { count = it } != -1) {
+                    total += count.toLong()
+                    if (fileLength > 0) {
+                        val percent = ((total * 100) / fileLength).toInt()
+                        if (percent != lastReported) {
+                            lastReported = percent
+                            onProgress(percent)
+                        }
+                    }
+                    output.write(data, 0, count)
+                }
+                output.flush()
+            }
+        }
+        conn.disconnect()
+
+        if (tempFile.exists()) {
+            if (destination.exists()) destination.delete()
+            tempFile.renameTo(destination)
+        }
     }
 }

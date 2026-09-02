@@ -40,6 +40,12 @@ fun SettingsScreen(
         "bn" to "Bengali (বাংলা)"
     )
 
+    val downloadState by settingsViewModel.downloadState.collectAsState()
+    var refreshTrigger by remember { mutableStateOf(0) }
+    val isSttReady = remember(refreshTrigger, downloadState) { settingsViewModel.isSttAvailable() }
+    val isHiTtsReady = remember(refreshTrigger, downloadState) { settingsViewModel.isTtsAvailable("hi") }
+    val isEnTtsReady = remember(refreshTrigger, downloadState) { settingsViewModel.isTtsAvailable("en") }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -60,6 +66,135 @@ fun SettingsScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp)
         ) {
+            Text("Neural Models (On-Demand Download)", style = MaterialTheme.typography.titleMedium)
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        "On-device models are downloaded once and cached in private storage (<45MB APK constraint).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // STT Status
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text("STT Engine (Zipformer INT8)", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                if (isSttReady) "✅ Installed & Ready" else "⚠️ Not Installed",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isSttReady) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                            )
+                        }
+                        if (!isSttReady) {
+                            Button(onClick = { settingsViewModel.downloadStt() }) {
+                                Text("Download")
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+                    // Hindi TTS Status
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text("TTS Voice — Hindi (VITS)", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                if (isHiTtsReady) "✅ Installed & Ready" else "⚠️ Not Installed",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isHiTtsReady) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                            )
+                        }
+                        if (!isHiTtsReady) {
+                            Button(onClick = { settingsViewModel.downloadTts("hi") }) {
+                                Text("Download")
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+                    // English TTS Status
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text("TTS Voice — English (VITS)", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                if (isEnTtsReady) "✅ Installed & Ready" else "⚠️ Not Installed",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isEnTtsReady) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                            )
+                        }
+                        if (!isEnTtsReady) {
+                            Button(onClick = { settingsViewModel.downloadTts("en") }) {
+                                Text("Download")
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    when (val state = downloadState) {
+                        is com.itantra.speech.DownloadState.Downloading -> {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                Text(
+                                    "Downloading ${state.item}: ${state.progressPercent}%",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                LinearProgressIndicator(
+                                    progress = { state.progressPercent / 100f },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
+                        is com.itantra.speech.DownloadState.Completed -> {
+                            Text(
+                                "🎉 ${state.message}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        is com.itantra.speech.DownloadState.Error -> {
+                            Text(
+                                "❌ ${state.message}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                        is com.itantra.speech.DownloadState.Idle -> {
+                            if (!isSttReady || !isHiTtsReady || !isEnTtsReady) {
+                                OutlinedButton(
+                                    onClick = { settingsViewModel.downloadAllEssentials() },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Download All Essential Models")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
             Text("Speech Engine Calibration", style = MaterialTheme.typography.titleMedium)
             Spacer(modifier = Modifier.height(8.dp))
 

@@ -24,14 +24,26 @@ class SherpaOnnxSpeechEngine @Inject constructor(
     private var stream: OnlineStream? = null
     private var currentAudioTrack: AudioTrack? = null
 
+    private var currentTtsLanguage: String? = null
+
     init {
-        initRecognizer()
-        initTts()
+        reloadRecognizer()
+        reloadTts("hi")
     }
 
-    private fun initRecognizer() {
-        try {
+    fun reloadRecognizer(): Boolean {
+        return try {
             val modelsDir = File(context.getExternalFilesDir(null), "models").absolutePath
+            val encFile = File("$modelsDir/stt/encoder.onnx")
+            val decFile = File("$modelsDir/stt/decoder.onnx")
+            val joinFile = File("$modelsDir/stt/joiner.onnx")
+            val tokFile = File("$modelsDir/stt/tokens.txt")
+
+            if (!encFile.exists() || !decFile.exists() || !joinFile.exists() || !tokFile.exists()) {
+                android.util.Log.w("iTantraSpeech", "STT models not found in $modelsDir/stt - download required")
+                return false
+            }
+
             val config = OnlineRecognizerConfig(
                 featConfig = FeatureConfig(
                     sampleRate = 16000,
@@ -39,51 +51,67 @@ class SherpaOnnxSpeechEngine @Inject constructor(
                 ),
                 modelConfig = OnlineModelConfig(
                     transducer = OnlineTransducerModelConfig(
-                        encoder = "$modelsDir/stt/encoder.onnx",
-                        decoder = "$modelsDir/stt/decoder.onnx",
-                        joiner = "$modelsDir/stt/joiner.onnx"
+                        encoder = encFile.absolutePath,
+                        decoder = decFile.absolutePath,
+                        joiner = joinFile.absolutePath
                     ),
-                    tokens = "$modelsDir/stt/tokens.txt",
+                    tokens = tokFile.absolutePath,
                     modelType = "zipformer"
                 ),
                 endpointConfig = EndpointConfig(),
                 enableEndpoint = true
             )
-            // Passing null/empty for AssetManager indicates absolute paths
             recognizer = OnlineRecognizer(assetManager = null, config = config)
+            android.util.Log.i("iTantraSpeech", "OnlineRecognizer initialized successfully from $modelsDir")
+            true
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("iTantraSpeech", "Failed to initialize OnlineRecognizer", e)
+            false
         }
     }
 
-    private fun initTts() {
-        try {
+    fun reloadTts(languageCode: String): Boolean {
+        return try {
             val modelsDir = File(context.getExternalFilesDir(null), "models").absolutePath
-            // Defaulting to Hindi for initialization, would be updated dynamically based on settings
-            val langCode = "hi" 
+            val modelFile = File("$modelsDir/tts/$languageCode/vits.onnx")
+            val tokensFile = File("$modelsDir/tts/$languageCode/tokens.txt")
+            val lexiconFile = File("$modelsDir/tts/$languageCode/lexicon.txt")
+
+            if (!modelFile.exists() || !tokensFile.exists()) {
+                android.util.Log.w("iTantraSpeech", "TTS models not found for $languageCode in $modelsDir/tts/$languageCode")
+                return false
+            }
+
             val vitsConfig = OfflineTtsVitsModelConfig(
-                model = "$modelsDir/tts/$langCode/vits.onnx",
-                tokens = "$modelsDir/tts/$langCode/tokens.txt",
-                lexicon = "$modelsDir/tts/$langCode/lexicon.txt"
+                model = modelFile.absolutePath,
+                tokens = tokensFile.absolutePath,
+                lexicon = if (lexiconFile.exists()) lexiconFile.absolutePath else ""
             )
-            val modelConfig = OfflineTtsModelConfig(
-                vits = vitsConfig
-            )
-            val config = OfflineTtsConfig(
-                model = modelConfig
-            )
+            val modelConfig = OfflineTtsModelConfig(vits = vitsConfig)
+            val config = OfflineTtsConfig(model = modelConfig)
+            tts?.release()
             tts = OfflineTts(assetManager = null, config = config)
+            currentTtsLanguage = languageCode
+            android.util.Log.i("iTantraSpeech", "OfflineTts ($languageCode) initialized successfully")
+            true
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("iTantraSpeech", "Failed to initialize OfflineTts for $languageCode", e)
+            false
         }
     }
+
+    fun isRecognizerReady(): Boolean = recognizer != null
+    fun isTtsReady(languageCode: String): Boolean = tts != null && currentTtsLanguage == languageCode
 
     override fun startListening(): Flow<String> {
         val flow = MutableStateFlow("")
+        if (recognizer == null) {
+            reloadRecognizer()
+        }
         try {
             stream = recognizer?.createStream()
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("iTantraSpeech", "Error creating stream", e)
         }
         return flow
     }
@@ -96,12 +124,15 @@ class SherpaOnnxSpeechEngine @Inject constructor(
                 it.release()
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("iTantraSpeech", "Error stopping stream", e)
         }
         stream = null
     }
 
     override suspend fun synthesizeSpeech(text: String, languageCode: String): Unit = withContext(Dispatchers.IO) {
+        if (tts == null || currentTtsLanguage != languageCode) {
+            reloadTts(languageCode)
+        }
         try {
             tts?.let { engine ->
                 val audio = engine.generate(text, sid = 0, speed = 1.0f)
@@ -110,9 +141,11 @@ class SherpaOnnxSpeechEngine @Inject constructor(
                 if (samples.isNotEmpty()) {
                     playPcmAudio(samples, sampleRate, isAlert = false)
                 }
+            } ?: run {
+                android.util.Log.w("iTantraSpeech", "TTS engine unavailable for language $languageCode. Download pack via Settings.")
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("iTantraSpeech", "Error generating speech", e)
         }
         Unit
     }
