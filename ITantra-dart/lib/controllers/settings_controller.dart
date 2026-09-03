@@ -17,6 +17,9 @@ class SettingsController extends ChangeNotifier {
   bool _isSttReady = false;
   bool get isSttReady => _isSttReady;
 
+  bool _isMtReady = false;
+  bool get isMtReady => _isMtReady;
+
   final Map<String, bool> _ttsReadyMap = {};
   bool isTtsReady(String code) => _ttsReadyMap[code] ?? false;
 
@@ -50,6 +53,7 @@ class SettingsController extends ChangeNotifier {
 
   Future<void> checkModelStatus() async {
     _isSttReady = await languagePackManager.isSttAvailable();
+    _isMtReady = await languagePackManager.isMtAvailable();
     for (final lang in LanguagePackManager.supportedLanguages) {
       _ttsReadyMap[lang.code] = await languagePackManager.isTtsAvailable(lang.code);
     }
@@ -58,6 +62,16 @@ class SettingsController extends ChangeNotifier {
 
   Future<void> downloadStt() async {
     await languagePackManager.downloadStt();
+    await checkModelStatus();
+  }
+
+  Future<void> downloadMt() async {
+    await languagePackManager.downloadMt();
+    await checkModelStatus();
+  }
+
+  Future<void> deleteMt() async {
+    await languagePackManager.deleteMt();
     await checkModelStatus();
   }
 
@@ -76,8 +90,39 @@ class SettingsController extends ChangeNotifier {
     await checkModelStatus();
   }
 
+  Future<void> deleteStt() async {
+    await languagePackManager.deleteStt();
+    await checkModelStatus();
+  }
+
+  Future<void> deleteTts(String languageCode) async {
+    await languagePackManager.deleteTts(languageCode);
+    await checkModelStatus();
+  }
+
+  Future<void> deleteAllModels() async {
+    await languagePackManager.deleteAllModels();
+    await checkModelStatus();
+  }
+
   Future<void> updateTtsSpeed(double speed) async {
     _settings = _settings.copyWith(ttsSpeed: speed);
+    await database.saveSettings(_settings);
+    notifyListeners();
+  }
+
+  String get ttsGender => _settings.ttsGender;
+
+  Future<void> updateTtsGender(String gender) async {
+    _settings = _settings.copyWith(ttsGender: gender);
+    await database.saveSettings(_settings);
+    notifyListeners();
+  }
+
+  double get vadSensitivity => _settings.vadSensitivity;
+
+  Future<void> updateVadSensitivity(double val) async {
+    _settings = _settings.copyWith(vadSensitivity: val);
     await database.saveSettings(_settings);
     notifyListeners();
   }

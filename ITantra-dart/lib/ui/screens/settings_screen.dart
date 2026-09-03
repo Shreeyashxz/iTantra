@@ -60,9 +60,19 @@ class SettingsScreen extends StatelessWidget {
 
                     // STT Status
                     _ModelStatusRow(
-                      title: 'STT Engine (Sherpa-ONNX Zipformer INT8)',
+                      title: 'STT Engine (AI4Bharat IndicConformer INT8)',
                       isReady: settingsController.isSttReady,
                       onDownload: () => settingsController.downloadStt(),
+                      onDelete: () => settingsController.deleteStt(),
+                    ),
+                    const Divider(height: 16),
+
+                    // MT Status
+                    _ModelStatusRow(
+                      title: 'MT Engine (AI4Bharat IndicTrans2 INT8 Quantized)',
+                      isReady: settingsController.isMtReady,
+                      onDownload: () => settingsController.downloadMt(),
+                      onDelete: () => settingsController.deleteMt(),
                     ),
                     const Divider(height: 24),
 
@@ -70,13 +80,22 @@ class SettingsScreen extends StatelessWidget {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Text(
-                          'TTS Voices — 10 Languages (Meta MMS)',
+                          'TTS Voices — 10 Languages (Meta MMS / Indic)',
                           style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
                         ),
-                        TextButton.icon(
-                          onPressed: () => settingsController.downloadAllLanguages(),
-                          icon: const Icon(Icons.download_for_offline_rounded, size: 18),
-                          label: const Text('Download All'),
+                        Row(
+                          children: [
+                            TextButton.icon(
+                              onPressed: () => settingsController.downloadAllLanguages(),
+                              icon: const Icon(Icons.download_for_offline_rounded, size: 18),
+                              label: const Text('Download All'),
+                            ),
+                            TextButton.icon(
+                              onPressed: () => settingsController.deleteAllModels(),
+                              icon: const Icon(Icons.delete_sweep_rounded, size: 18, color: Colors.redAccent),
+                              label: const Text('Delete All', style: TextStyle(color: Colors.redAccent)),
+                            ),
+                          ],
                         ),
                       ],
                     ),
@@ -91,6 +110,7 @@ class SettingsScreen extends StatelessWidget {
                           title: '${lang.nativeName} (${lang.englishName})',
                           isReady: isReady,
                           onDownload: () => settingsController.downloadTts(lang.code),
+                          onDelete: () => settingsController.deleteTts(lang.code),
                         ),
                       );
                     }),
@@ -203,6 +223,36 @@ class SettingsScreen extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
+                      'Voice Gender (आवाज का प्रकार)',
+                      style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: double.infinity,
+                      child: SegmentedButton<String>(
+                        segments: const [
+                          ButtonSegment(
+                            value: 'FEMALE',
+                            icon: Icon(Icons.female_rounded),
+                            label: Text('Female (स्त्री)'),
+                          ),
+                          ButtonSegment(
+                            value: 'MALE',
+                            icon: Icon(Icons.male_rounded),
+                            label: Text('Male (पुरुष)'),
+                          ),
+                        ],
+                        selected: {settings.ttsGender},
+                        onSelectionChanged: (set) {
+                          if (set.isNotEmpty) {
+                            settingsController.updateTtsGender(set.first);
+                          }
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+
+                    Text(
                       'TTS Playback Speed: ${settings.ttsSpeed.toStringAsFixed(1)}x',
                       style: theme.textTheme.bodyMedium,
                     ),
@@ -213,6 +263,37 @@ class SettingsScreen extends StatelessWidget {
                       divisions: 6,
                       label: '${settings.ttsSpeed.toStringAsFixed(1)}x',
                       onChanged: (val) => settingsController.updateTtsSpeed(val),
+                    ),
+                    const SizedBox(height: 10),
+
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'VAD Voice Sensitivity: ${(settings.vadSensitivity * 100).toInt()}%',
+                          style: theme.textTheme.bodyMedium,
+                        ),
+                        Text(
+                          settings.vadSensitivity >= 0.7
+                              ? 'High (Soft Voice)'
+                              : settings.vadSensitivity <= 0.3
+                                  ? 'Low (Noisy Room)'
+                                  : 'Balanced',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: theme.colorScheme.primary,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    Slider(
+                      value: settings.vadSensitivity,
+                      min: 0.1,
+                      max: 1.0,
+                      divisions: 9,
+                      label: '${(settings.vadSensitivity * 100).toInt()}%',
+                      onChanged: (val) => settingsController.updateVadSensitivity(val),
                     ),
                     const SizedBox(height: 10),
 
@@ -280,11 +361,13 @@ class _ModelStatusRow extends StatelessWidget {
   final String title;
   final bool isReady;
   final VoidCallback onDownload;
+  final VoidCallback onDelete;
 
   const _ModelStatusRow({
     required this.title,
     required this.isReady,
     required this.onDownload,
+    required this.onDelete,
   });
 
   @override
@@ -311,12 +394,19 @@ class _ModelStatusRow extends StatelessWidget {
           ),
         ),
         if (!isReady)
-          ElevatedButton(
+          ElevatedButton.icon(
             onPressed: onDownload,
+            icon: const Icon(Icons.download_rounded, size: 16),
+            label: const Text('Download'),
             style: ElevatedButton.styleFrom(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             ),
-            child: const Text('Download'),
+          )
+        else
+          IconButton(
+            onPressed: onDelete,
+            tooltip: 'Delete Model',
+            icon: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent, size: 22),
           ),
       ],
     );

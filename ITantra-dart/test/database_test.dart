@@ -45,6 +45,8 @@ void main() {
               id INTEGER PRIMARY KEY,
               preferredLanguage TEXT NOT NULL DEFAULT 'hi',
               ttsSpeed REAL NOT NULL DEFAULT 1.0,
+              ttsGender TEXT NOT NULL DEFAULT 'FEMALE',
+              vadSensitivity REAL NOT NULL DEFAULT 0.6,
               pttMode TEXT NOT NULL DEFAULT 'HOLD',
               installedLanguagePacks TEXT NOT NULL DEFAULT 'hi,en',
               alertVolumeMax INTEGER NOT NULL DEFAULT 1,

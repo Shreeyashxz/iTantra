@@ -41,11 +41,11 @@ dependencies:
   path: ^1.9.1
   record: ^7.1.1
   audioplayers: ^6.8.1
-  flutter_tts: ^4.2.5
   intl: ^0.20.3
   google_fonts: ^8.2.1
   http: ^1.6.0
   crypto: ^3.0.7
+  sherpa_onnx: ^1.13.7
 
 dev_dependencies:
   flutter_test:

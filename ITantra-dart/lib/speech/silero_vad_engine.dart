@@ -5,7 +5,7 @@ import 'vad_engine.dart';
 
 /// Real-time Voice Activity Detection Engine matching Silero VAD parameters
 class SileroVadEngine implements VadEngine {
-  final double threshold;
+  double sensitivity; // 0.1 (least sensitive) to 1.0 (most sensitive)
   final double minSilenceDuration;
   final double minSpeechDuration;
   final int sampleRate;
@@ -17,11 +17,15 @@ class SileroVadEngine implements VadEngine {
   final _speechStateController = StreamController<bool>.broadcast();
 
   SileroVadEngine({
-    this.threshold = 0.5,
-    this.minSilenceDuration = 0.5,
-    this.minSpeechDuration = 0.25,
+    this.sensitivity = 0.6,
+    this.minSilenceDuration = 0.4,
+    this.minSpeechDuration = 0.15,
     this.sampleRate = 16000,
   });
+
+  void setSensitivity(double value) {
+    sensitivity = value.clamp(0.1, 1.0);
+  }
 
   @override
   Stream<bool> startVad(Stream<Int16List> audioData) {
@@ -47,8 +51,12 @@ class SileroVadEngine implements VadEngine {
     }
     final rms = sqrt(sum / samples.length);
 
-    // Dynamic energy thresholding calibrated for vocal frequency response
-    final isVoiceFrame = rms > (threshold * 0.05);
+    // Dynamic energy thresholding calibrated for sensitivity:
+    // 1.0 = High Sensitivity (cutoff 0.005, detects soft speech/whispers)
+    // 0.6 = Balanced/Normal (cutoff 0.017)
+    // 0.1 = Low Sensitivity (cutoff 0.032, filters loud ambient noise)
+    final cutoff = 0.005 + (1.0 - sensitivity) * 0.030;
+    final isVoiceFrame = rms > cutoff;
 
     // Frame duration based on chunk length
     final frameDurationMs = (samples.length / sampleRate) * 1000;

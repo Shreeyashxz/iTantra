@@ -75,20 +75,80 @@ class LanguagePackManager {
     return dir;
   }
 
-  Future<bool> isSttAvailable() async {
-    final dir = await getModelsDirectory();
-    final enc = File(p.join(dir.path, 'stt', 'encoder.onnx'));
-    final dec = File(p.join(dir.path, 'stt', 'decoder.onnx'));
-    final join = File(p.join(dir.path, 'stt', 'joiner.onnx'));
-    final tokens = File(p.join(dir.path, 'stt', 'tokens.txt'));
-    return await enc.exists() && await dec.exists() && await join.exists() && await tokens.exists();
-  }
-
   Future<bool> isTtsAvailable(String languageCode) async {
     final dir = await getModelsDirectory();
     final model = File(p.join(dir.path, 'tts', languageCode, 'vits.onnx'));
     final tokens = File(p.join(dir.path, 'tts', languageCode, 'tokens.txt'));
     return await model.exists() && await tokens.exists();
+  }
+
+  Future<bool> isSttAvailable() async {
+    final dir = await getModelsDirectory();
+    final indic = File(p.join(dir.path, 'stt', 'indic_conformer.onnx'));
+    final tokens = File(p.join(dir.path, 'stt', 'tokens.txt'));
+    return await indic.exists() && await tokens.exists();
+  }
+
+  Future<bool> isMtAvailable() async {
+    final dir = await getModelsDirectory();
+    final model = File(p.join(dir.path, 'mt', 'indictrans2_int8.onnx'));
+    final spm = File(p.join(dir.path, 'mt', 'spm.model'));
+    return await model.exists() && await spm.exists();
+  }
+
+  Future<bool> downloadMt() async {
+    final modelsDir = await getModelsDirectory();
+    final mtDir = Directory(p.join(modelsDir.path, 'mt'));
+    if (!await mtDir.exists()) {
+      await mtDir.create(recursive: true);
+    }
+
+    final targetModel = File(p.join(mtDir.path, 'indictrans2_int8.onnx'));
+    final targetSpm = File(p.join(mtDir.path, 'spm.model'));
+
+    // Public ungated AI4Bharat IndicTrans2 INT8 ONNX checkpoint
+    const mtBaseUrl =
+        'https://huggingface.co/hari31416/indictrans2-indic-indic-dist-320M-ONNX-int8/resolve/main';
+
+    try {
+      _emitState(const DownloadStateDownloading('AI4Bharat IndicTrans2 INT8 (Model)', 0));
+
+      // 1. Download Quantized Encoder ONNX weights
+      if (!await targetModel.exists() || await targetModel.length() < 1024) {
+        await _downloadFileWithRedirects('$mtBaseUrl/encoder_model.onnx', targetModel, (percent) {
+          _emitState(DownloadStateDownloading('IndicTrans2 INT8 Encoder', percent));
+        });
+      }
+
+      // 2. Download Dictionary & Tokenizer mapping
+      if (!await targetSpm.exists() || await targetSpm.length() < 100) {
+        await _downloadFileWithRedirects('$mtBaseUrl/dict.SRC.json', targetSpm, (percent) {
+          _emitState(DownloadStateDownloading('IndicTrans2 Dictionary & Tokens', percent));
+        });
+      }
+
+      _emitState(const DownloadStateCompleted('AI4Bharat IndicTrans2 INT8 Ready'));
+      return true;
+    } catch (e) {
+      debugPrint('Error downloading IndicTrans2 MT: $e');
+      _emitState(DownloadStateError('IndicTrans2 MT download failed: $e'));
+      return false;
+    }
+  }
+
+  Future<bool> deleteMt() async {
+    try {
+      final modelsDir = await getModelsDirectory();
+      final mtDir = Directory(p.join(modelsDir.path, 'mt'));
+      if (await mtDir.exists()) {
+        await mtDir.delete(recursive: true);
+      }
+      _emitState(const DownloadStateCompleted('IndicTrans2 MT model deleted'));
+      return true;
+    } catch (e) {
+      debugPrint('Error deleting IndicTrans2 MT model: $e');
+      return false;
+    }
   }
 
   Future<bool> downloadStt() async {
@@ -98,12 +158,20 @@ class LanguagePackManager {
       await sttDir.create(recursive: true);
     }
 
-    const baseUrl =
-        'https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26/resolve/main';
+    // Clean out old Zipformer models to ensure fresh AI4Bharat IndicConformer
+    final oldZipformer = File(p.join(sttDir.path, 'encoder.onnx'));
+    if (await oldZipformer.exists()) {
+      try {
+        await sttDir.delete(recursive: true);
+        await sttDir.create(recursive: true);
+      } catch (_) {}
+    }
+
+    // AI4Bharat IndicConformer quantized INT8 model for Sherpa-ONNX
+    const indicBaseUrl =
+        'https://huggingface.co/meetsync/indic-conformer-onnx-sherpa/resolve/main';
     final files = [
-      ('encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx', 'encoder.onnx'),
-      ('decoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx', 'decoder.onnx'),
-      ('joiner-epoch-99-avg-1-chunk-16-left-128.int8.onnx', 'joiner.onnx'),
+      ('model.int8.onnx', 'indic_conformer.onnx'),
       ('tokens.txt', 'tokens.txt'),
     ];
 
@@ -111,18 +179,60 @@ class LanguagePackManager {
       for (final (remote, local) in files) {
         final targetFile = File(p.join(sttDir.path, local));
         if (!await targetFile.exists() || (await targetFile.length()) == 0) {
-          _emitState(DownloadStateDownloading('STT ($local)', 0));
-          await _downloadFileWithRedirects('$baseUrl/$remote', targetFile, (percent) {
-            _emitState(DownloadStateDownloading('STT ($local)', percent));
+          _emitState(DownloadStateDownloading('IndicConformer ($local)', 0));
+          await _downloadFileWithRedirects('$indicBaseUrl/$remote', targetFile, (percent) {
+            _emitState(DownloadStateDownloading('IndicConformer ($local)', percent));
           });
         }
       }
-      _emitState(const DownloadStateCompleted('STT Neural Engine Ready'));
+      _emitState(const DownloadStateCompleted('AI4Bharat IndicConformer Ready'));
       return true;
     } catch (e) {
-      debugPrint('Error downloading STT: $e');
-      _emitState(DownloadStateError('STT Download failed: $e'));
+      debugPrint('Error downloading IndicConformer STT: $e');
+      _emitState(DownloadStateError('IndicConformer download failed: $e'));
       return false;
+    }
+  }
+
+  Future<bool> deleteStt() async {
+    try {
+      final modelsDir = await getModelsDirectory();
+      final sttDir = Directory(p.join(modelsDir.path, 'stt'));
+      if (await sttDir.exists()) {
+        await sttDir.delete(recursive: true);
+      }
+      _emitState(const DownloadStateCompleted('STT model deleted'));
+      return true;
+    } catch (e) {
+      debugPrint('Error deleting STT model: $e');
+      return false;
+    }
+  }
+
+  Future<bool> deleteTts(String languageCode) async {
+    try {
+      final modelsDir = await getModelsDirectory();
+      final ttsDir = Directory(p.join(modelsDir.path, 'tts', languageCode));
+      if (await ttsDir.exists()) {
+        await ttsDir.delete(recursive: true);
+      }
+      _emitState(DownloadStateCompleted('TTS model ($languageCode) deleted'));
+      return true;
+    } catch (e) {
+      debugPrint('Error deleting TTS model ($languageCode): $e');
+      return false;
+    }
+  }
+
+  Future<void> deleteAllModels() async {
+    try {
+      final modelsDir = await getModelsDirectory();
+      if (await modelsDir.exists()) {
+        await modelsDir.delete(recursive: true);
+      }
+      _emitState(const DownloadStateCompleted('All models deleted'));
+    } catch (e) {
+      debugPrint('Error deleting all models: $e');
     }
   }
 
@@ -210,7 +320,7 @@ class LanguagePackManager {
       while (redirects < 10) {
         final request = await client.getUrl(currentUri);
         request.headers.set(HttpHeaders.acceptHeader, '*/*');
-        request.headers.set(HttpHeaders.userAgentHeader, 'iTantra/1.0.0 (Windows)');
+        request.headers.set(HttpHeaders.userAgentHeader, 'Mozilla/5.0 (Mobile; Android)');
         response = await request.close();
 
         if (response.statusCode == HttpStatus.movedPermanently ||

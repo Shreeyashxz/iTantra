@@ -34,7 +34,7 @@ class AppDatabase {
 
     return await openDatabase(
       path,
-      version: 2,
+      version: 4,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -76,6 +76,8 @@ class AppDatabase {
         id INTEGER PRIMARY KEY,
         preferredLanguage TEXT NOT NULL DEFAULT 'hi',
         ttsSpeed REAL NOT NULL DEFAULT 1.0,
+        ttsGender TEXT NOT NULL DEFAULT 'FEMALE',
+        vadSensitivity REAL NOT NULL DEFAULT 0.6,
         pttMode TEXT NOT NULL DEFAULT 'HOLD',
         installedLanguagePacks TEXT NOT NULL DEFAULT 'hi,en',
         alertVolumeMax INTEGER NOT NULL DEFAULT 1,
@@ -88,8 +90,15 @@ class AppDatabase {
   }
 
   Future<void> _upgradeDB(Database db, int oldVersion, int newVersion) async {
-    if (oldVersion < 2) {
-      // Future migrations handled cleanly
+    if (oldVersion < 3) {
+      try {
+        await db.execute("ALTER TABLE user_settings ADD COLUMN ttsGender TEXT NOT NULL DEFAULT 'FEMALE'");
+      } catch (_) {}
+    }
+    if (oldVersion < 4) {
+      try {
+        await db.execute("ALTER TABLE user_settings ADD COLUMN vadSensitivity REAL NOT NULL DEFAULT 0.6");
+      } catch (_) {}
     }
   }
 

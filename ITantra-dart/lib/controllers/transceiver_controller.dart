@@ -9,6 +9,7 @@ import '../network/transceiver_manager.dart';
 import '../network/wifi_mesh_manager.dart';
 import '../proto/transceiver_packet.dart';
 import '../speech/comm_pipeline.dart';
+import '../speech/indic_trans_engine.dart';
 import '../speech/sherpa_onnx_speech_engine.dart';
 
 class TransceiverController extends ChangeNotifier {
@@ -19,6 +20,7 @@ class TransceiverController extends ChangeNotifier {
   final AlertReceiver alertReceiver;
   final SherpaOnnxSpeechEngine speechEngine;
   final AppDatabase database;
+  final IndicTransEngine transEngine = IndicTransEngine();
 
   late final String deviceId;
   List<MessageEntity> _messages = [];
@@ -74,7 +76,23 @@ class TransceiverController extends ChangeNotifier {
       notifyListeners();
 
       if (packet.type == PacketType.voice) {
-        await speechEngine.synthesizeSpeech(packet.transcript, packet.languageCode);
+        final settings = await database.getSettings();
+        if (settings.autoPlayAudio) {
+          String textToSpeak = packet.transcript;
+          // Voice -> STT -> Transfer -> MT (if translation needed) -> TTS -> Audio
+          if (packet.languageCode != _selectedLanguage) {
+            try {
+              textToSpeak = await transEngine.translate(
+                text: packet.transcript,
+                sourceLang: packet.languageCode,
+                targetLang: _selectedLanguage,
+              );
+            } catch (e) {
+              debugPrint('[TransceiverController] MT translation error: $e');
+            }
+          }
+          await speechEngine.synthesizeSpeech(textToSpeak, _selectedLanguage, settings.ttsGender);
+        }
       }
     });
 

@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'alerts/alert_broadcaster.dart';
@@ -27,6 +28,14 @@ void main() async {
   if (!kIsWeb && (Platform.isWindows || Platform.isLinux)) {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
+  }
+
+  // Initialize sherpa-onnx native bindings (loads C++ shared library from exe dir)
+  try {
+    final exeDir = File(Platform.resolvedExecutable).parent.path;
+    sherpa.initBindings(exeDir);
+  } catch (_) {
+    sherpa.initBindings();
   }
 
   // Core singletons (matching Hilt AppModule / SpeechModule / TransportModule / DatabaseModule)

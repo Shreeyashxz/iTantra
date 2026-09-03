@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'alert_screen.dart';
+import 'dev_diagnostics_screen.dart';
 import 'history_screen.dart';
 import 'peer_discovery_screen.dart';
 import 'settings_screen.dart';
@@ -109,6 +110,17 @@ class HomeScreen extends StatelessWidget {
               color: theme.colorScheme.onSurfaceVariant,
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const SettingsScreen()),
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            _ActionTile(
+              title: 'Neural Speech & Dev Diagnostics',
+              subtitle: 'Test live STT (record & text formation) and TTS (text-to-audio)',
+              icon: Icons.developer_mode_rounded,
+              color: const Color(0xFF00E676),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const DevDiagnosticsScreen()),
               ),
             ),
           ],
