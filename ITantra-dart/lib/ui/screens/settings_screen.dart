@@ -74,6 +74,15 @@ class SettingsScreen extends StatelessWidget {
                       onDownload: () => settingsController.downloadMt(),
                       onDelete: () => settingsController.deleteMt(),
                     ),
+                    const Divider(height: 16),
+
+                    // AI4Bharat Universal TTS (Rasa-13)
+                    _ModelStatusRow(
+                      title: 'Universal TTS (AI4Bharat Rasa-13 VITS — All 13 Languages, ~123 MB)',
+                      isReady: settingsController.isRasa13Ready,
+                      onDownload: () => settingsController.downloadRasa13(),
+                      onDelete: () => settingsController.deleteRasa13(),
+                    ),
                     const Divider(height: 24),
 
                     Row(

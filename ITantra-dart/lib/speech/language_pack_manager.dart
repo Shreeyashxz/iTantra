@@ -77,8 +77,20 @@ class LanguagePackManager {
 
   Future<bool> isTtsAvailable(String languageCode) async {
     final dir = await getModelsDirectory();
+    final rasaModel = File(p.join(dir.path, 'tts', 'rasa13', 'vits.onnx'));
+    final rasaTokens = File(p.join(dir.path, 'tts', 'rasa13', 'tokens.txt'));
+    if (await rasaModel.exists() && await rasaTokens.exists()) {
+      return true;
+    }
     final model = File(p.join(dir.path, 'tts', languageCode, 'vits.onnx'));
     final tokens = File(p.join(dir.path, 'tts', languageCode, 'tokens.txt'));
+    return await model.exists() && await tokens.exists();
+  }
+
+  Future<bool> isRasa13Available() async {
+    final dir = await getModelsDirectory();
+    final model = File(p.join(dir.path, 'tts', 'rasa13', 'vits.onnx'));
+    final tokens = File(p.join(dir.path, 'tts', 'rasa13', 'tokens.txt'));
     return await model.exists() && await tokens.exists();
   }
 
@@ -233,6 +245,67 @@ class LanguagePackManager {
       _emitState(const DownloadStateCompleted('All models deleted'));
     } catch (e) {
       debugPrint('Error deleting all models: $e');
+    }
+  }
+
+  /// Downloads AI4Bharat Rasa-13 Universal Multilingual Neural VITS (~123 MB for all 13 Indian languages)
+  Future<bool> downloadRasa13() async {
+    final modelsDir = await getModelsDirectory();
+    final rasaDir = Directory(p.join(modelsDir.path, 'tts', 'rasa13'));
+    if (!await rasaDir.exists()) {
+      await rasaDir.create(recursive: true);
+    }
+
+    final targetModel = File(p.join(rasaDir.path, 'vits.onnx'));
+    final targetTokens = File(p.join(rasaDir.path, 'tokens.txt'));
+
+    // 1. Check if local sanitized 6-input model is ready
+    final localConverted = File('converted_models/vits_rasa13_6in.onnx');
+    final localTokens = File('converted_models/tokens.txt');
+
+    try {
+      _emitState(const DownloadStateDownloading('AI4Bharat Rasa-13 VITS (All Languages)', 0));
+
+      if (await localConverted.exists() && await localTokens.exists()) {
+        await localConverted.copy(targetModel.path);
+        await localTokens.copy(targetTokens.path);
+        _emitState(const DownloadStateCompleted('AI4Bharat Rasa-13 VITS Ready (All Languages)'));
+        return true;
+      }
+
+      // 2. Download from public repository
+      const rasaBaseUrl = 'https://huggingface.co/MatiasLin/sherpa-onnx-vits-rasa-13/resolve/main';
+      if (!await targetTokens.exists() || (await targetTokens.length()) == 0) {
+        await _downloadFileWithRedirects('$rasaBaseUrl/tokens.txt', targetTokens, (pct) {});
+      }
+
+      if (!await targetModel.exists() || (await targetModel.length()) == 0) {
+        await _downloadFileWithRedirects('$rasaBaseUrl/model.onnx', targetModel, (percent) {
+          _emitState(DownloadStateDownloading('AI4Bharat Rasa-13 VITS (All Languages)', percent));
+        });
+      }
+
+      _emitState(const DownloadStateCompleted('AI4Bharat Rasa-13 VITS Ready (All Languages)'));
+      return true;
+    } catch (e) {
+      debugPrint('Error downloading Rasa-13 VITS: $e');
+      _emitState(DownloadStateError('Rasa-13 VITS download failed: $e'));
+      return false;
+    }
+  }
+
+  Future<bool> deleteRasa13() async {
+    try {
+      final modelsDir = await getModelsDirectory();
+      final rasaDir = Directory(p.join(modelsDir.path, 'tts', 'rasa13'));
+      if (await rasaDir.exists()) {
+        await rasaDir.delete(recursive: true);
+      }
+      _emitState(const DownloadStateCompleted('AI4Bharat Rasa-13 model deleted'));
+      return true;
+    } catch (e) {
+      debugPrint('Error deleting Rasa-13 model: $e');
+      return false;
     }
   }
 

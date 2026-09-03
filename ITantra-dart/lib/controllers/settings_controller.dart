@@ -20,6 +20,9 @@ class SettingsController extends ChangeNotifier {
   bool _isMtReady = false;
   bool get isMtReady => _isMtReady;
 
+  bool _isRasa13Ready = false;
+  bool get isRasa13Ready => _isRasa13Ready;
+
   final Map<String, bool> _ttsReadyMap = {};
   bool isTtsReady(String code) => _ttsReadyMap[code] ?? false;
 
@@ -54,6 +57,7 @@ class SettingsController extends ChangeNotifier {
   Future<void> checkModelStatus() async {
     _isSttReady = await languagePackManager.isSttAvailable();
     _isMtReady = await languagePackManager.isMtAvailable();
+    _isRasa13Ready = await languagePackManager.isRasa13Available();
     for (final lang in LanguagePackManager.supportedLanguages) {
       _ttsReadyMap[lang.code] = await languagePackManager.isTtsAvailable(lang.code);
     }
@@ -72,6 +76,16 @@ class SettingsController extends ChangeNotifier {
 
   Future<void> deleteMt() async {
     await languagePackManager.deleteMt();
+    await checkModelStatus();
+  }
+
+  Future<void> downloadRasa13() async {
+    await languagePackManager.downloadRasa13();
+    await checkModelStatus();
+  }
+
+  Future<void> deleteRasa13() async {
+    await languagePackManager.deleteRasa13();
     await checkModelStatus();
   }
 

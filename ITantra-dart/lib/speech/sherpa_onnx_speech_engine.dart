@@ -383,14 +383,28 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
 
     try {
       final dir = await _modelsDir();
-      final ttsDir = p.join(dir, 'tts', languageCode);
 
-      final model = p.join(ttsDir, 'vits.onnx');
-      final tokens = p.join(ttsDir, 'tokens.txt');
-      final lexicon = p.join(ttsDir, 'lexicon.txt');
+      // 1. Check for AI4Bharat Multilingual Rasa-13 VITS model first (covers all languages)
+      final rasaDir = p.join(dir, 'tts', 'rasa13');
+      final rasaModel = p.join(rasaDir, 'vits.onnx');
+      final rasaTokens = p.join(rasaDir, 'tokens.txt');
 
-      if (!File(model).existsSync() || !File(tokens).existsSync()) {
-        return false;
+      String model;
+      String tokens;
+      String lexicon = '';
+
+      if (File(rasaModel).existsSync() && File(rasaTokens).existsSync()) {
+        model = rasaModel;
+        tokens = rasaTokens;
+      } else {
+        final ttsDir = p.join(dir, 'tts', languageCode);
+        model = p.join(ttsDir, 'vits.onnx');
+        tokens = p.join(ttsDir, 'tokens.txt');
+        lexicon = p.join(ttsDir, 'lexicon.txt');
+
+        if (!File(model).existsSync() || !File(tokens).existsSync()) {
+          return false;
+        }
       }
 
       final config = sherpa.OfflineTtsConfig(
