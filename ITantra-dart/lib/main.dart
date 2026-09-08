@@ -1,3 +1,4 @@
+import 'dart:ffi';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -13,6 +14,7 @@ import 'controllers/settings_controller.dart';
 import 'controllers/transceiver_controller.dart';
 import 'data/app_database.dart';
 import 'network/transceiver_manager.dart';
+import 'network/wifi_direct_p2p_service.dart';
 import 'network/wifi_mesh_manager.dart';
 import 'speech/audio_recorder_service.dart';
 import 'speech/comm_pipeline.dart';
@@ -25,17 +27,45 @@ import 'ui/theme/app_theme.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // Custom ErrorWidget to ensure any release-mode rendering error displays readable info instead of a blank screen
+  ErrorWidget.builder = (FlutterErrorDetails details) {
+    return Material(
+      color: const Color(0xFF0A0E17),
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Text(
+            'Initialization notice: ${details.exceptionAsString()}',
+            style: const TextStyle(color: Colors.white70, fontSize: 13),
+            textAlign: TextAlign.center,
+          ),
+        ),
+      ),
+    );
+  };
+
   if (!kIsWeb && (Platform.isWindows || Platform.isLinux)) {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
   }
 
-  // Initialize sherpa-onnx native bindings (loads C++ shared library from exe dir)
+  // Initialize sherpa-onnx native bindings:
+  // On Windows: pass exeDir so onnxruntime and sherpa-onnx DLLs are loaded from the runner directory.
+  // On Android: pre-load onnxruntime if needed, then call sherpa.initBindings() without arguments so Android loads .so from APK jniLibs.
   try {
-    final exeDir = File(Platform.resolvedExecutable).parent.path;
-    sherpa.initBindings(exeDir);
-  } catch (_) {
-    sherpa.initBindings();
+    if (!kIsWeb && Platform.isWindows) {
+      final exeDir = File(Platform.resolvedExecutable).parent.path;
+      sherpa.initBindings(exeDir);
+    } else if (!kIsWeb) {
+      if (Platform.isAndroid) {
+        try {
+          DynamicLibrary.open('libonnxruntime.so');
+        } catch (_) {}
+      }
+      sherpa.initBindings();
+    }
+  } catch (e) {
+    debugPrint('[Init] sherpa-onnx initBindings notice: $e');
   }
 
   // Core singletons (matching Hilt AppModule / SpeechModule / TransportModule / DatabaseModule)
@@ -46,6 +76,7 @@ void main() async {
   final speechEngine = SherpaOnnxSpeechEngine(languagePackManager: languagePackManager);
   final transceiverManager = TransceiverManager();
   final meshManager = WifiMeshManager(transceiverManager: transceiverManager);
+  final p2pService = WifiDirectP2pService(transceiverManager: transceiverManager);
   final alertBroadcaster = AlertBroadcaster(transceiverManager: transceiverManager);
   final alertReceiver = AlertReceiver(
     transceiverManager: transceiverManager,
@@ -82,6 +113,7 @@ void main() async {
           create: (_) => PeerController(
             meshManager: meshManager,
             transceiverManager: transceiverManager,
+            p2pService: p2pService,
           ),
         ),
         ChangeNotifierProvider(

@@ -14,8 +14,9 @@ class DownloadStateIdle extends DownloadState {
 
 class DownloadStateDownloading extends DownloadState {
   final String item;
+  final String modelKey;
   final int progressPercent;
-  const DownloadStateDownloading(this.item, this.progressPercent);
+  const DownloadStateDownloading(this.item, this.progressPercent, {this.modelKey = ''});
 }
 
 class DownloadStateCompleted extends DownloadState {
@@ -123,19 +124,19 @@ class LanguagePackManager {
         'https://huggingface.co/hari31416/indictrans2-indic-indic-dist-320M-ONNX-int8/resolve/main';
 
     try {
-      _emitState(const DownloadStateDownloading('AI4Bharat IndicTrans2 INT8 (Model)', 0));
+      _emitState(const DownloadStateDownloading('AI4Bharat IndicTrans2 INT8 (Model)', 0, modelKey: 'mt'));
 
       // 1. Download Quantized Encoder ONNX weights
       if (!await targetModel.exists() || await targetModel.length() < 1024) {
         await _downloadFileWithRedirects('$mtBaseUrl/encoder_model.onnx', targetModel, (percent) {
-          _emitState(DownloadStateDownloading('IndicTrans2 INT8 Encoder', percent));
+          _emitState(DownloadStateDownloading('IndicTrans2 INT8 Encoder', percent, modelKey: 'mt'));
         });
       }
 
       // 2. Download Dictionary & Tokenizer mapping
       if (!await targetSpm.exists() || await targetSpm.length() < 100) {
         await _downloadFileWithRedirects('$mtBaseUrl/dict.SRC.json', targetSpm, (percent) {
-          _emitState(DownloadStateDownloading('IndicTrans2 Dictionary & Tokens', percent));
+          _emitState(DownloadStateDownloading('IndicTrans2 Dictionary & Tokens', percent, modelKey: 'mt'));
         });
       }
 
@@ -191,9 +192,9 @@ class LanguagePackManager {
       for (final (remote, local) in files) {
         final targetFile = File(p.join(sttDir.path, local));
         if (!await targetFile.exists() || (await targetFile.length()) == 0) {
-          _emitState(DownloadStateDownloading('IndicConformer ($local)', 0));
+          _emitState(DownloadStateDownloading('IndicConformer ($local)', 0, modelKey: 'stt'));
           await _downloadFileWithRedirects('$indicBaseUrl/$remote', targetFile, (percent) {
-            _emitState(DownloadStateDownloading('IndicConformer ($local)', percent));
+            _emitState(DownloadStateDownloading('IndicConformer ($local)', percent, modelKey: 'stt'));
           });
         }
       }
@@ -264,7 +265,7 @@ class LanguagePackManager {
     final localTokens = File('converted_models/tokens.txt');
 
     try {
-      _emitState(const DownloadStateDownloading('AI4Bharat Rasa-13 VITS (All Languages)', 0));
+      _emitState(const DownloadStateDownloading('AI4Bharat Rasa-13 VITS (All Languages)', 0, modelKey: 'rasa13'));
 
       if (await localConverted.exists() && await localTokens.exists()) {
         await localConverted.copy(targetModel.path);
@@ -281,7 +282,7 @@ class LanguagePackManager {
 
       if (!await targetModel.exists() || (await targetModel.length()) == 0) {
         await _downloadFileWithRedirects('$rasaBaseUrl/model.onnx', targetModel, (percent) {
-          _emitState(DownloadStateDownloading('AI4Bharat Rasa-13 VITS (All Languages)', percent));
+          _emitState(DownloadStateDownloading('AI4Bharat Rasa-13 VITS (All Languages)', percent, modelKey: 'rasa13'));
         });
       }
 
@@ -333,16 +334,16 @@ class LanguagePackManager {
       final targetLexicon = File(p.join(ttsDir.path, 'lexicon.txt'));
 
       if (!await targetModel.exists() || (await targetModel.length()) == 0) {
-        _emitState(DownloadStateDownloading('${langMeta.englishName} Voice (Model)', 0));
+        _emitState(DownloadStateDownloading('${langMeta.englishName} Voice (Model)', 0, modelKey: 'tts_$languageCode'));
         await _downloadFileWithRedirects('$mmsBaseUrl/model.onnx', targetModel, (percent) {
-          _emitState(DownloadStateDownloading('${langMeta.englishName} Voice (Model)', percent));
+          _emitState(DownloadStateDownloading('${langMeta.englishName} Voice (Model)', percent, modelKey: 'tts_$languageCode'));
         });
       }
 
       if (!await targetTokens.exists() || (await targetTokens.length()) == 0) {
-        _emitState(DownloadStateDownloading('${langMeta.englishName} Voice (Tokens)', 0));
+        _emitState(DownloadStateDownloading('${langMeta.englishName} Voice (Tokens)', 0, modelKey: 'tts_$languageCode'));
         await _downloadFileWithRedirects('$mmsBaseUrl/tokens.txt', targetTokens, (percent) {
-          _emitState(DownloadStateDownloading('${langMeta.englishName} Voice (Tokens)', percent));
+          _emitState(DownloadStateDownloading('${langMeta.englishName} Voice (Tokens)', percent, modelKey: 'tts_$languageCode'));
         });
       }
 

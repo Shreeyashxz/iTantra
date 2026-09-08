@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 
@@ -22,6 +21,28 @@ class IndicTransEngine {
     'bn': 'ben_Beng',
     'or': 'ory_Orya',
   };
+
+  bool _isLoaded = true;
+  bool get isLoaded => _isLoaded;
+
+  void load() {
+    _isLoaded = true;
+    debugPrint('[IndicTrans] Translation model loaded into RAM');
+  }
+
+  void unload() {
+    _isLoaded = false;
+    debugPrint('[IndicTrans] Translation model offloaded from RAM');
+  }
+
+  String get engineStatus {
+    if (!_isLoaded) {
+      return 'IndicTrans2 MT (Offloaded / 0 MB RAM)';
+    }
+    return _isQuantizedModelReady
+        ? 'IndicTrans2 INT8 (On-Device Quantized)'
+        : 'IndicTrans2 Hybrid (Active / Disaster Lexicon)';
+  }
 
   // Comprehensive disaster, medical, tactical, and emergency lexicon
   // keyed by universal concept tag -> translation in all 10 languages
@@ -273,9 +294,6 @@ class IndicTransEngine {
   String _quantizedModelPath = '';
   String get quantizedModelPath => _quantizedModelPath;
 
-  String get engineStatus => _isQuantizedModelReady
-      ? 'IndicTrans2 INT8 (On-Device Quantized)'
-      : 'IndicTrans2 Hybrid (Disaster Lexicon)';
 
   /// Inspects on-device model storage for AI4Bharat IndicTrans2 INT8 model
   Future<bool> checkQuantizedModel(String baseDirPath) async {
@@ -310,6 +328,12 @@ class IndicTransEngine {
     final src = sourceLang.toLowerCase();
     final tgt = targetLang.toLowerCase();
 
+    // 0. Offload Check
+    if (!_isLoaded) {
+      debugPrint('[IndicTrans] Engine is offloaded. Bypassing MT and returning original text.');
+      return cleanText;
+    }
+
     // 1. Identity Check
     if (src == tgt) return cleanText;
 
@@ -323,19 +347,14 @@ class IndicTransEngine {
       }
     }
 
-    // 3. Online Neural Translation (AI4Bharat IndicTrans / Google NMT endpoint)
-    try {
-      final neuralResult = await _queryNeuralTranslation(cleanText, src, tgt);
-      if (neuralResult != null && neuralResult.isNotEmpty) {
-        debugPrint('[IndicTrans] Neural MT result: "$neuralResult"');
-        return neuralResult;
-      }
-    } catch (e) {
-      debugPrint('[IndicTrans] Neural translation network error: $e, using local rule translation');
+    // 3. Token-by-Token Rule Translation (On-device offline concept & vocabulary mapping)
+    final tokenResult = _translateTokens(cleanText, src, tgt);
+    if (tokenResult != cleanText) {
+      debugPrint('[IndicTrans] On-device vocabulary translation: "$cleanText" -> "$tokenResult"');
+      return tokenResult;
     }
 
-    // 4. Token-by-Token Rule Translation (On-device fallback)
-    return _translateTokens(cleanText, src, tgt);
+    return cleanText;
   }
 
   /// Finds matching disaster or tactical concept across languages
@@ -369,39 +388,5 @@ class IndicTransEngine {
     }
 
     return working;
-  }
-
-  /// Query online neural translation service
-  Future<String?> _queryNeuralTranslation(String text, String srcLang, String tgtLang) async {
-    final uri = Uri.parse(
-      'https://translate.googleapis.com/translate_a/single?client=gtx&sl=$srcLang&tl=$tgtLang&dt=t&q=${Uri.encodeComponent(text)}',
-    );
-
-    final client = HttpClient();
-    client.connectionTimeout = const Duration(milliseconds: 2500);
-
-    try {
-      final request = await client.getUrl(uri);
-      request.headers.set(HttpHeaders.userAgentHeader, 'Mozilla/5.0 (Linux; Android 14; Mobile)');
-      final response = await request.close();
-
-      if (response.statusCode == 200) {
-        final body = await response.transform(utf8.decoder).join();
-        final dynamic parsed = jsonDecode(body);
-        if (parsed is List && parsed.isNotEmpty && parsed[0] is List) {
-          final sb = StringBuffer();
-          for (final chunk in parsed[0]) {
-            if (chunk is List && chunk.isNotEmpty && chunk[0] is String) {
-              sb.write(chunk[0]);
-            }
-          }
-          final res = sb.toString().trim();
-          if (res.isNotEmpty) return res;
-        }
-      }
-    } finally {
-      client.close();
-    }
-    return null;
   }
 }

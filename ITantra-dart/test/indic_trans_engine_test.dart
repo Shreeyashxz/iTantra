@@ -67,5 +67,31 @@ void main() {
       expect(engine.isQuantizedModelReady, isFalse);
       expect(engine.engineStatus, contains('IndicTrans2'));
     });
+
+    test('IndicTransEngine offloading and loading lifecycle', () async {
+      expect(engine.isLoaded, isTrue);
+
+      engine.unload();
+      expect(engine.isLoaded, isFalse);
+      expect(engine.engineStatus, contains('Offloaded / 0 MB RAM'));
+
+      // Translation while offloaded bypasses and returns original text
+      final bypassed = await engine.translate(
+        text: 'आपातकाल',
+        sourceLang: 'hi',
+        targetLang: 'en',
+      );
+      expect(bypassed, equals('आपातकाल'));
+
+      // Reloading restores translation
+      engine.load();
+      expect(engine.isLoaded, isTrue);
+      final translated = await engine.translate(
+        text: 'आपातकाल',
+        sourceLang: 'hi',
+        targetLang: 'en',
+      );
+      expect(translated, equals('Emergency'));
+    });
   });
 }

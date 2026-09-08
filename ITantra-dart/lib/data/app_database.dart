@@ -34,7 +34,7 @@ class AppDatabase {
 
     return await openDatabase(
       path,
-      version: 4,
+      version: 6,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -77,11 +77,13 @@ class AppDatabase {
         preferredLanguage TEXT NOT NULL DEFAULT 'hi',
         ttsSpeed REAL NOT NULL DEFAULT 1.0,
         ttsGender TEXT NOT NULL DEFAULT 'FEMALE',
+        ttsEngineType TEXT NOT NULL DEFAULT 'AI4BHARAT_RASA',
         vadSensitivity REAL NOT NULL DEFAULT 0.6,
         pttMode TEXT NOT NULL DEFAULT 'HOLD',
         installedLanguagePacks TEXT NOT NULL DEFAULT 'hi,en',
         alertVolumeMax INTEGER NOT NULL DEFAULT 1,
-        autoPlayAudio INTEGER NOT NULL DEFAULT 1
+        autoPlayAudio INTEGER NOT NULL DEFAULT 1,
+        isMtEnabled INTEGER NOT NULL DEFAULT 1
       )
     ''');
 
@@ -98,6 +100,16 @@ class AppDatabase {
     if (oldVersion < 4) {
       try {
         await db.execute("ALTER TABLE user_settings ADD COLUMN vadSensitivity REAL NOT NULL DEFAULT 0.6");
+      } catch (_) {}
+    }
+    if (oldVersion < 5) {
+      try {
+        await db.execute("ALTER TABLE user_settings ADD COLUMN ttsEngineType TEXT NOT NULL DEFAULT 'AI4BHARAT_RASA'");
+      } catch (_) {}
+    }
+    if (oldVersion < 6) {
+      try {
+        await db.execute("ALTER TABLE user_settings ADD COLUMN isMtEnabled INTEGER NOT NULL DEFAULT 1");
       } catch (_) {}
     }
   }

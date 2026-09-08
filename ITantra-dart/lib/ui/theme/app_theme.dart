@@ -12,8 +12,75 @@ class AppTheme {
   static const Color darkSurface = Color(0xFF131A29);
   static const Color darkSurfaceVariant = Color(0xFF1B2438);
 
+  // ── Brand Gradients ──
+  static const LinearGradient primaryGradient = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFF448AFF), accentCyan],
+  );
+
+  static const LinearGradient emergencyGradient = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [emergencyRed, Color(0xFFFF6D00)],
+  );
+
+  /// Glassmorphic card decoration — translucent frosted-glass effect.
+  /// Uses brightness to auto-adapt between dark and light themes.
+  static BoxDecoration glassmorphicDecoration(Brightness brightness) {
+    final isDark = brightness == Brightness.dark;
+    return BoxDecoration(
+      color: isDark
+          ? Colors.white.withAlpha(10)
+          : Colors.white.withAlpha(200),
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(
+        color: isDark
+            ? Colors.white.withAlpha(18)
+            : Colors.black.withAlpha(10),
+        width: 1,
+      ),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withAlpha(isDark ? 40 : 12),
+          blurRadius: 16,
+          offset: const Offset(0, 4),
+        ),
+      ],
+    );
+  }
+
+  /// Custom page route with slide+fade transition.
+  static Route<T> pageTransition<T>(Widget page, {int durationMs = 300}) {
+    return PageRouteBuilder<T>(
+      pageBuilder: (context, animation, secondaryAnimation) => page,
+      transitionsBuilder: (context, animation, secondaryAnimation, child) {
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeInOutCubic,
+        );
+        return FadeTransition(
+          opacity: curved,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0, 0.04),
+              end: Offset.zero,
+            ).animate(curved),
+            child: child,
+          ),
+        );
+      },
+      transitionDuration: Duration(milliseconds: durationMs),
+    );
+  }
+
   static ThemeData get darkTheme {
-    final baseTextTheme = GoogleFonts.interTextTheme(ThemeData.dark().textTheme);
+    TextTheme baseTextTheme;
+    try {
+      baseTextTheme = GoogleFonts.interTextTheme(ThemeData.dark().textTheme);
+    } catch (_) {
+      baseTextTheme = ThemeData.dark().textTheme;
+    }
 
     return ThemeData(
       useMaterial3: true,
@@ -61,7 +128,12 @@ class AppTheme {
   }
 
   static ThemeData get lightTheme {
-    final baseTextTheme = GoogleFonts.interTextTheme(ThemeData.light().textTheme);
+    TextTheme baseTextTheme;
+    try {
+      baseTextTheme = GoogleFonts.interTextTheme(ThemeData.light().textTheme);
+    } catch (_) {
+      baseTextTheme = ThemeData.light().textTheme;
+    }
 
     return ThemeData(
       useMaterial3: true,

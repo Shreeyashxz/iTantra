@@ -13,6 +13,7 @@ class PeerDiscoveryScreen extends StatefulWidget {
 class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
   final TextEditingController _customIpController = TextEditingController();
   final TextEditingController _customPortController = TextEditingController(text: '8888');
+  int _selectedTransportMode = 0; // 0 = Wi-Fi Direct P2P, 1 = Wi-Fi Mesh / Hotspot
 
   @override
   void dispose() {
@@ -104,16 +105,22 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
     final theme = Theme.of(context);
     final controller = context.watch<PeerController>();
 
-    final isConnected = controller.connectedCount > 0;
+    final isConnected = controller.connectedCount > 0 || controller.p2pConnection.groupFormed;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Wi-Fi Mesh & Peer Discovery'),
+        title: const Text('Peer Discovery & Radio Links'),
         actions: [
           IconButton(
             tooltip: 'Refresh Network Interfaces',
             icon: const Icon(Icons.refresh_rounded),
-            onPressed: () => controller.refreshNetwork(),
+            onPressed: () {
+              if (_selectedTransportMode == 0) {
+                controller.startP2pDiscovery();
+              } else {
+                controller.refreshNetwork();
+              }
+            },
           ),
         ],
       ),
@@ -122,7 +129,182 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Local Node & Interface Status Card
+            // Transport Mode Selector
+            SegmentedButton<int>(
+              segments: const [
+                ButtonSegment(
+                  value: 0,
+                  icon: Icon(Icons.devices_rounded),
+                  label: Text('Wi-Fi Direct P2P'),
+                ),
+                ButtonSegment(
+                  value: 1,
+                  icon: Icon(Icons.hub_rounded),
+                  label: Text('Wi-Fi Mesh / LAN'),
+                ),
+              ],
+              selected: {_selectedTransportMode},
+              onSelectionChanged: (set) => setState(() => _selectedTransportMode = set.first),
+            ),
+            const SizedBox(height: 16),
+
+            if (_selectedTransportMode == 0) ...[
+              // ==========================================
+              // WI-FI DIRECT (P2P Native Device-to-Device)
+              // ==========================================
+              Card(
+                color: controller.p2pConnection.groupFormed
+                    ? const Color(0xFF1B5E20).withAlpha(35)
+                    : theme.colorScheme.surfaceContainerHighest,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  side: BorderSide(
+                    color: controller.p2pConnection.groupFormed
+                        ? Colors.green
+                        : theme.colorScheme.outlineVariant,
+                  ),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(
+                                controller.p2pConnection.groupFormed
+                                    ? Icons.wifi_protected_setup_rounded
+                                    : Icons.perm_scan_wifi_rounded,
+                                color: controller.p2pConnection.groupFormed
+                                    ? Colors.green
+                                    : theme.colorScheme.primary,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                'Wi-Fi Direct (P2P Field Radio)',
+                                style: theme.textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                          Chip(
+                            label: Text(
+                              controller.p2pConnection.groupFormed
+                                  ? 'LINK ESTABLISHED'
+                                  : (controller.isP2pDiscovering ? 'SCANNING' : 'STANDBY'),
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                                color: controller.p2pConnection.groupFormed
+                                    ? Colors.green
+                                    : theme.colorScheme.primary,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Direct routerless link: Connect two Android devices directly in disaster or offline field zones with zero network infrastructure.',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                      if (controller.p2pConnection.groupFormed) ...[
+                        const Divider(height: 20),
+                        Row(
+                          children: [
+                            const Icon(Icons.check_circle_rounded, color: Colors.green, size: 20),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                controller.p2pConnection.isGroupOwner
+                                    ? 'Group Owner (Host) • Transceiver Server Active on Port 8888'
+                                    : 'Client Linked to Host: ${controller.p2pConnection.groupOwnerAddress}',
+                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: () => controller.disconnectP2p(),
+                              child: const Text('DISCONNECT', style: TextStyle(color: Colors.red)),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+
+              ElevatedButton.icon(
+                onPressed: () => controller.startP2pDiscovery(),
+                icon: const Icon(Icons.radar_rounded),
+                label: const Text('SCAN FOR NEARBY P2P DEVICES'),
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              Text(
+                'Discovered P2P Devices (${controller.p2pPeers.length})',
+                style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+
+              if (controller.p2pPeers.isEmpty)
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Center(
+                      child: Column(
+                        children: [
+                          Icon(Icons.wifi_find_rounded, size: 40, color: theme.colorScheme.outline),
+                          const SizedBox(height: 8),
+                          Text(
+                            controller.isP2pDiscovering
+                                ? 'Scanning for nearby Wi-Fi Direct radios...'
+                                : 'No P2P devices discovered yet.\nTap "Scan For Nearby P2P Devices" above.',
+                            textAlign: TextAlign.center,
+                            style: theme.textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                )
+              else
+                ListView.separated(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: controller.p2pPeers.length,
+                  separatorBuilder: (_, _) => const SizedBox(height: 8),
+                  itemBuilder: (context, index) {
+                    final peer = controller.p2pPeers[index];
+                    return Card(
+                      child: ListTile(
+                        leading: CircleAvatar(
+                          child: Icon(Icons.phone_android_rounded, color: theme.colorScheme.primary),
+                        ),
+                        title: Text(peer.deviceName, style: const TextStyle(fontWeight: FontWeight.bold)),
+                        subtitle: Text('${peer.deviceAddress} • ${peer.statusLabel}'),
+                        trailing: ElevatedButton(
+                          onPressed: () => controller.connectP2p(peer.deviceAddress),
+                          child: const Text('Connect'),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+            ] else ...[
+              // ==========================================
+              // WI-FI MESH / HOTSPOT (LAN Transport)
+              // ==========================================
             Card(
               color: isConnected
                   ? const Color(0xFF1B5E20).withAlpha(35)
@@ -565,8 +747,9 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
               ),
             ],
           ],
-        ),
+        ],
       ),
-    );
-  }
+    ),
+  );
+}
 }

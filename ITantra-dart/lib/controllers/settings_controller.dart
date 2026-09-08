@@ -133,6 +133,14 @@ class SettingsController extends ChangeNotifier {
     notifyListeners();
   }
 
+  String get ttsEngineType => _settings.ttsEngineType;
+
+  Future<void> updateTtsEngineType(String engineType) async {
+    _settings = _settings.copyWith(ttsEngineType: engineType);
+    await database.saveSettings(_settings);
+    notifyListeners();
+  }
+
   double get vadSensitivity => _settings.vadSensitivity;
 
   Future<void> updateVadSensitivity(double val) async {
@@ -143,6 +151,26 @@ class SettingsController extends ChangeNotifier {
 
   Future<void> updateAutoPlayAudio(bool autoPlay) async {
     _settings = _settings.copyWith(autoPlayAudio: autoPlay);
+    await database.saveSettings(_settings);
+    notifyListeners();
+  }
+
+  bool get isMtEnabled => _settings.isMtEnabled;
+
+  Future<void> updateMtEnabled(bool enabled) async {
+    _settings = _settings.copyWith(isMtEnabled: enabled);
+    await database.saveSettings(_settings);
+    notifyListeners();
+  }
+
+  Future<void> updatePreferredLanguage(String lang) async {
+    _settings = _settings.copyWith(preferredLanguage: lang);
+    await database.saveSettings(_settings);
+    notifyListeners();
+  }
+
+  Future<void> updateInstalledPacks(String packs) async {
+    _settings = _settings.copyWith(installedLanguagePacks: packs);
     await database.saveSettings(_settings);
     notifyListeners();
   }

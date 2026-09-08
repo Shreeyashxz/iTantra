@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:io';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import '../network/transceiver_manager.dart';
@@ -20,6 +22,8 @@ class AlertEvent {
 }
 
 class AlertReceiver {
+  static const _hardwareAlertChannel = MethodChannel('com.itantra/hardware_alert');
+
   final TransceiverManager transceiverManager;
   final SherpaOnnxSpeechEngine speechEngine;
 
@@ -56,18 +60,50 @@ class AlertReceiver {
     _currentAlert = event;
     _activeAlertController.add(event);
 
-    // 1. High-intensity tactile / vibration alert
-    try {
-      HapticFeedback.heavyImpact();
-      await Future.delayed(const Duration(milliseconds: 200));
-      HapticFeedback.vibrate();
-    } catch (_) {}
+    // 1. Android Native Hardware Alarm: Force STREAM_ALARM to max volume + tactile waveform
+    if (!kIsWeb && Platform.isAndroid) {
+      try {
+        await _hardwareAlertChannel.invokeMethod('triggerHardwareAlert');
+      } catch (e) {
+        debugPrint('[AlertReceiver] Hardware alert channel error: $e');
+      }
+    } else {
+      try {
+        HapticFeedback.heavyImpact();
+        await Future.delayed(const Duration(milliseconds: 200));
+        HapticFeedback.vibrate();
+      } catch (_) {}
+    }
 
-    // 2. Synthesize distress text at maximum volume
+    // 2. Configure audio player context for Alarm / Sonification audio stream
+    try {
+      await AudioPlayer.global.setAudioContext(
+        AudioContext(
+          android: const AudioContextAndroid(
+            isSpeakerphoneOn: true,
+            stayAwake: true,
+            contentType: AndroidContentType.sonification,
+            usageType: AndroidUsageType.alarm,
+            audioFocus: AndroidAudioFocus.gainTransientExclusive,
+          ),
+          iOS: AudioContextIOS(
+            category: AVAudioSessionCategory.playback,
+            options: {
+              AVAudioSessionOptions.duckOthers,
+              AVAudioSessionOptions.defaultToSpeaker,
+            },
+          ),
+        ),
+      );
+    } catch (e) {
+      debugPrint('[AlertReceiver] Error setting alarm audio context: $e');
+    }
+
+    // 3. Synthesize distress text at maximum alarm stream volume
     try {
       await speechEngine.synthesizeSpeech(packet.transcript, packet.languageCode);
     } catch (e) {
-      debugPrint('Error synthesizing alert speech: $e');
+      debugPrint('[AlertReceiver] Error synthesizing alert speech: $e');
     }
   }
 

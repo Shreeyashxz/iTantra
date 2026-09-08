@@ -58,13 +58,33 @@ class _HistoryScreenState extends State<HistoryScreen> {
             Expanded(
               child: controller.messages.isEmpty
                   ? Center(
-                      child: Text(
-                        controller.searchQuery.isEmpty
-                            ? 'No transmission logs recorded yet.'
-                            : 'No transmissions matching "${controller.searchQuery}".',
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(18),
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.surfaceContainerHighest.withAlpha(120),
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              Icons.history_rounded,
+                              size: 48,
+                              color: theme.colorScheme.onSurfaceVariant.withAlpha(120),
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                          Text(
+                            controller.searchQuery.isEmpty
+                                ? 'No transmission logs recorded yet.\nPackets and utterances will appear here.'
+                                : 'No transmissions matching "${controller.searchQuery}".',
+                            textAlign: TextAlign.center,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                              height: 1.4,
+                            ),
+                          ),
+                        ],
                       ),
                     )
                   : ListView.builder(

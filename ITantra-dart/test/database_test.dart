@@ -46,11 +46,13 @@ void main() {
               preferredLanguage TEXT NOT NULL DEFAULT 'hi',
               ttsSpeed REAL NOT NULL DEFAULT 1.0,
               ttsGender TEXT NOT NULL DEFAULT 'FEMALE',
+              ttsEngineType TEXT NOT NULL DEFAULT 'AI4BHARAT_RASA',
               vadSensitivity REAL NOT NULL DEFAULT 0.6,
               pttMode TEXT NOT NULL DEFAULT 'HOLD',
               installedLanguagePacks TEXT NOT NULL DEFAULT 'hi,en',
               alertVolumeMax INTEGER NOT NULL DEFAULT 1,
-              autoPlayAudio INTEGER NOT NULL DEFAULT 1
+              autoPlayAudio INTEGER NOT NULL DEFAULT 1,
+              isMtEnabled INTEGER NOT NULL DEFAULT 1
             )
           ''');
         },
@@ -112,6 +114,7 @@ void main() {
       final retrieved = UserSettingsEntity.fromMap(results.first);
       expect(retrieved.preferredLanguage, equals('ta'));
       expect(retrieved.ttsSpeed, equals(1.2));
+      expect(retrieved.isMtEnabled, isTrue);
     });
   });
 }

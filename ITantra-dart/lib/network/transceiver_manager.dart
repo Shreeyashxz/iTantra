@@ -51,6 +51,12 @@ class TransceiverManager {
   List<String> get connectedPeerIps => _peerSockets.keys.toList();
   List<PeerLinkStats> get activePeerStats => _peerStats.values.toList();
 
+  int? get averageRttMs {
+    final active = _peerStats.values.where((s) => s.rttMs > 0);
+    if (active.isEmpty) return null;
+    return (active.map((s) => s.rttMs).reduce((a, b) => a + b) / active.length).round();
+  }
+
   int totalPacketsSent = 0;
   int totalPacketsReceived = 0;
 
@@ -172,6 +178,9 @@ class TransceiverManager {
                 _statsController.add(activePeerStats);
               }
             } else {
+              if (packet.type == PacketType.voice) {
+                _sendAck(socket, packet.timestampMs);
+              }
               _incomingPacketsController.add(packet);
             }
 

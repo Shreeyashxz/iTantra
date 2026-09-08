@@ -43,14 +43,25 @@ class CommPipeline {
     final vadStream = vadEngine.startVad(audioStream);
     final textStream = speechEngine.startListening();
 
-    _audioSubscription?.cancel();
-    _audioSubscription = audioStream.listen((chunk) {
-      speechEngine.feedAudioData(chunk);
-    });
+    bool isSpeechActive = false;
 
     _vadSubscription?.cancel();
     _vadSubscription = vadStream.listen((isSpeech) {
-      // Voice activity state monitored
+      if (isSpeech && !isSpeechActive) {
+        // C3: Speech onset — flush pre-speech lookback buffer to avoid clipping first syllable
+        for (final frame in vadEngine.lookbackBuffer) {
+          speechEngine.feedAudioData(frame);
+        }
+      }
+      isSpeechActive = isSpeech;
+    });
+
+    _audioSubscription?.cancel();
+    _audioSubscription = audioStream.listen((chunk) {
+      // C1: Only feed audio to STT when speech is active (or initial onset buffer)
+      if (isSpeechActive) {
+        speechEngine.feedAudioData(chunk);
+      }
     });
 
     _sttSubscription?.cancel();

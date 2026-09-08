@@ -38,10 +38,16 @@ class TransceiverController extends ChangeNotifier {
   String _selectedLanguage = 'hi';
   String get selectedLanguage => _selectedLanguage;
 
+  bool _isMtEnabled = true;
+  bool get isMtEnabled => _isMtEnabled;
+
+  int? get linkRttMs => transceiverManager.averageRttMs;
+
   StreamSubscription<TransceiverPacket>? _packetSubscription;
   StreamSubscription<AlertEvent?>? _alertSubscription;
   StreamSubscription<String>? _statusSubscription;
   StreamSubscription<List<MessageEntity>>? _dbSubscription;
+  StreamSubscription<dynamic>? _statsSubscription;
 
   TransceiverController({
     required this.commPipeline,
@@ -57,6 +63,10 @@ class TransceiverController extends ChangeNotifier {
   }
 
   Future<void> _init() async {
+    // Load settings including MT preference
+    final initialSettings = await database.getSettings();
+    _isMtEnabled = initialSettings.isMtEnabled;
+
     // Load initial message history
     _messages = await database.getAllMessages();
     notifyListeners();
@@ -79,22 +89,47 @@ class TransceiverController extends ChangeNotifier {
         final settings = await database.getSettings();
         if (settings.autoPlayAudio) {
           String textToSpeak = packet.transcript;
-          // Voice -> STT -> Transfer -> MT (if translation needed) -> TTS -> Audio
-          if (packet.languageCode != _selectedLanguage) {
+
+          // B2: Overlapped MT Translation + TTS Pre-warming (only if MT enabled and languages differ)
+          final ttsWarmUp = speechEngine.initTts(_selectedLanguage, settings.ttsEngineType);
+
+          if (_isMtEnabled && packet.languageCode != _selectedLanguage) {
             try {
-              textToSpeak = await transEngine.translate(
+              final translationFuture = transEngine.translate(
                 text: packet.transcript,
                 sourceLang: packet.languageCode,
                 targetLang: _selectedLanguage,
               );
+              // Wait for MT translation and TTS engine warm-up concurrently
+              final results = await Future.wait([translationFuture, ttsWarmUp]);
+              textToSpeak = results[0] as String;
             } catch (e) {
               debugPrint('[TransceiverController] MT translation error: $e');
+              await ttsWarmUp;
             }
+          } else {
+            // MT is bypassed or languages match — zero translation overhead!
+            await ttsWarmUp;
           }
-          await speechEngine.synthesizeSpeech(textToSpeak, _selectedLanguage, settings.ttsGender);
+
+          await speechEngine.synthesizeSpeech(
+            textToSpeak,
+            _selectedLanguage,
+            settings.ttsGender,
+            settings.ttsEngineType,
+          );
         }
       }
     });
+
+    // B1: Warm-up active language TTS engine in background after initialization
+    unawaited(
+      database.getSettings().then((settings) {
+        speechEngine.initTts(_selectedLanguage, settings.ttsEngineType);
+      }).catchError((e) {
+        debugPrint('[TransceiverController] Startup warm-up ignored: $e');
+      }),
+    );
 
     // Listen for alerts
     _alertSubscription = alertReceiver.activeAlert.listen((alert) {
@@ -111,6 +146,11 @@ class TransceiverController extends ChangeNotifier {
     // Listen for database updates
     _dbSubscription = database.messagesStream.listen((list) {
       _messages = list;
+      notifyListeners();
+    });
+
+    // Listen for network stats updates (RTT / Latency)
+    _statsSubscription = transceiverManager.statsStream.listen((_) {
       notifyListeners();
     });
   }
@@ -165,17 +205,35 @@ class TransceiverController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> sendEmergencyAlert(String alertText) async {
+  Future<void> setMtEnabled(bool enabled) async {
+    if (_isMtEnabled != enabled) {
+      _isMtEnabled = enabled;
+      notifyListeners();
+      try {
+        final currentSettings = await database.getSettings();
+        await database.saveSettings(currentSettings.copyWith(isMtEnabled: enabled));
+      } catch (e) {
+        debugPrint('[TransceiverController] Error saving MT setting: $e');
+      }
+    }
+  }
+
+  void toggleMt() {
+    setMtEnabled(!_isMtEnabled);
+  }
+
+  Future<void> sendEmergencyAlert(String alertText, {String? languageCode}) async {
+    final lang = languageCode ?? _selectedLanguage;
     await alertBroadcaster.broadcastAlert(
       senderId: deviceId,
-      languageCode: _selectedLanguage,
+      languageCode: lang,
       alertText: alertText,
     );
 
     final entity = MessageEntity(
       senderId: deviceId,
       text: alertText,
-      languageCode: _selectedLanguage,
+      languageCode: lang,
       type: 'ALERT',
       timestamp: DateTime.now().millisecondsSinceEpoch,
       isIncoming: false,
@@ -201,6 +259,7 @@ class TransceiverController extends ChangeNotifier {
     _alertSubscription?.cancel();
     _statusSubscription?.cancel();
     _dbSubscription?.cancel();
+    _statsSubscription?.cancel();
     super.dispose();
   }
 }

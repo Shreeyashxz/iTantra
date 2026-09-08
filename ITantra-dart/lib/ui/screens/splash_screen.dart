@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import '../../data/app_database.dart';
 import 'home_screen.dart';
+import 'language_setup_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -8,20 +10,43 @@ class SplashScreen extends StatefulWidget {
   State<SplashScreen> createState() => _SplashScreenState();
 }
 
-class _SplashScreenState extends State<SplashScreen> {
+class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderStateMixin {
+  late final AnimationController _pulseController;
+
   @override
   void initState() {
     super.initState();
-    _navigateToHome();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    )..repeat(reverse: true);
+    _navigateToNext();
   }
 
-  Future<void> _navigateToHome() async {
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _navigateToNext() async {
     await Future.delayed(const Duration(milliseconds: 1600));
+    if (!mounted) return;
+
+    bool isFirstLaunch = false;
+    try {
+      final settings = await AppDatabase.instance
+          .getSettings()
+          .timeout(const Duration(milliseconds: 400));
+      isFirstLaunch = !settings.installedLanguagePacks.contains('SETUP_DONE');
+    } catch (_) {}
+
     if (mounted) {
+      _pulseController.stop();
       Navigator.of(context).pushReplacement(
         PageRouteBuilder(
           pageBuilder: (context, animation, secondaryAnimation) =>
-              const HomeScreen(),
+              isFirstLaunch ? const LanguageSetupScreen() : const HomeScreen(),
           transitionsBuilder: (context, animation, secondaryAnimation, child) =>
               FadeTransition(opacity: animation, child: child),
           transitionDuration: const Duration(milliseconds: 500),

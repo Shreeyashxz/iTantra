@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../controllers/transceiver_controller.dart';
@@ -13,9 +14,10 @@ class TransceiverScreen extends StatefulWidget {
 }
 
 class _TransceiverScreenState extends State<TransceiverScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
+  late AnimationController _waveController;
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
@@ -39,14 +41,20 @@ class _TransceiverScreenState extends State<TransceiverScreen>
       vsync: this,
       duration: const Duration(milliseconds: 650),
     );
-    _pulseAnimation = Tween<double>(begin: 1.0, end: 1.16).animate(
+    _pulseAnimation = Tween<double>(begin: 1.0, end: 1.15).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
+
+    _waveController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1000),
     );
   }
 
   @override
   void dispose() {
     _pulseController.dispose();
+    _waveController.dispose();
     _textController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -69,11 +77,18 @@ class _TransceiverScreenState extends State<TransceiverScreen>
     final theme = Theme.of(context);
     final controller = context.watch<TransceiverController>();
 
-    if (controller.isTransmitting && !_pulseController.isAnimating) {
-      _pulseController.repeat(reverse: true);
-    } else if (!controller.isTransmitting && _pulseController.isAnimating) {
-      _pulseController.stop();
-      _pulseController.reset();
+    if (controller.isTransmitting) {
+      if (!_pulseController.isAnimating) _pulseController.repeat(reverse: true);
+      if (!_waveController.isAnimating) _waveController.repeat();
+    } else {
+      if (_pulseController.isAnimating) {
+        _pulseController.stop();
+        _pulseController.reset();
+      }
+      if (_waveController.isAnimating) {
+        _waveController.stop();
+        _waveController.reset();
+      }
     }
 
     final isConnected = controller.connectionStatus.contains('Connected');
@@ -84,16 +99,83 @@ class _TransceiverScreenState extends State<TransceiverScreen>
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text('iTantra Transceiver'),
-            Text(
-              'Link: ${controller.connectionStatus}',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: isConnected ? const Color(0xFF00E676) : theme.colorScheme.onSurfaceVariant,
-                fontWeight: isConnected ? FontWeight.bold : FontWeight.normal,
-              ),
+            Row(
+              children: [
+                Flexible(
+                  child: Text(
+                    'Link: ${controller.connectionStatus}',
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: isConnected ? const Color(0xFF00E676) : theme.colorScheme.onSurfaceVariant,
+                      fontWeight: isConnected ? FontWeight.bold : FontWeight.normal,
+                    ),
+                  ),
+                ),
+                if (controller.linkRttMs != null) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: Colors.green.withAlpha(40),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.green, width: 0.8),
+                    ),
+                    child: Text(
+                      '⏱️ ${controller.linkRttMs}ms • ~160 bps',
+                      style: const TextStyle(fontSize: 10, color: Colors.green, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ],
+              ],
             ),
           ],
         ),
         actions: [
+          // MT (Machine Translation) Quick Toggle
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+            child: InkWell(
+              onTap: () => controller.toggleMt(),
+              borderRadius: BorderRadius.circular(16),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: controller.isMtEnabled
+                      ? theme.colorScheme.primary.withAlpha(35)
+                      : theme.colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: controller.isMtEnabled
+                        ? theme.colorScheme.primary
+                        : theme.colorScheme.outline.withAlpha(80),
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.translate_rounded,
+                      size: 14,
+                      color: controller.isMtEnabled
+                          ? theme.colorScheme.primary
+                          : theme.colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      controller.isMtEnabled ? 'MT ON' : 'MT OFF',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: controller.isMtEnabled
+                            ? theme.colorScheme.primary
+                            : theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
           IconButton(
             icon: Icon(
               isConnected ? Icons.wifi_tethering_rounded : Icons.wifi_find_rounded,
@@ -150,6 +232,12 @@ class _TransceiverScreenState extends State<TransceiverScreen>
                 color: theme.colorScheme.errorContainer,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: theme.colorScheme.error),
+                boxShadow: [
+                  BoxShadow(
+                    color: theme.colorScheme.error.withAlpha(50),
+                    blurRadius: 10,
+                  ),
+                ],
               ),
               child: Row(
                 children: [
@@ -227,17 +315,25 @@ class _TransceiverScreenState extends State<TransceiverScreen>
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(
-                          Icons.speaker_phone_rounded,
-                          size: 48,
-                          color: theme.colorScheme.onSurfaceVariant.withAlpha(100),
+                        Container(
+                          padding: const EdgeInsets.all(20),
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.primary.withAlpha(20),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            Icons.speaker_phone_rounded,
+                            size: 48,
+                            color: theme.colorScheme.primary.withAlpha(160),
+                          ),
                         ),
-                        const SizedBox(height: 12),
+                        const SizedBox(height: 14),
                         Text(
                           'No transmissions yet.\nHold Push-To-Talk to speak.',
                           textAlign: TextAlign.center,
                           style: theme.textTheme.bodyMedium?.copyWith(
                             color: theme.colorScheme.onSurfaceVariant,
+                            height: 1.4,
                           ),
                         ),
                       ],
@@ -265,7 +361,7 @@ class _TransceiverScreenState extends State<TransceiverScreen>
                       hintText: 'Quiet mode utterance...',
                       hintStyle: theme.textTheme.bodySmall,
                       isDense: true,
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(24)),
                     ),
                     onSubmitted: (val) {
@@ -292,87 +388,217 @@ class _TransceiverScreenState extends State<TransceiverScreen>
             ),
           ),
 
-          // Transmitting Bitrate Status
-          AnimatedOpacity(
-            opacity: controller.isTransmitting ? 1.0 : 0.0,
+          // Transmitting Bitrate Status with Waveform
+          AnimatedCrossFade(
             duration: const Duration(milliseconds: 200),
-            child: Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text(
-                'Transmitting semantic voice payload (~160 bps)...',
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: theme.colorScheme.error,
-                  fontWeight: FontWeight.bold,
-                ),
+            crossFadeState: controller.isTransmitting
+                ? CrossFadeState.showSecond
+                : CrossFadeState.showFirst,
+            firstChild: const SizedBox(height: 16),
+            secondChild: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      _WaveformBars(controller: _waveController),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Transmitting semantic voice payload (~160 bps)',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.error,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      _WaveformBars(controller: _waveController),
+                    ],
+                  ),
+                ],
               ),
             ),
           ),
 
-          // Large Push-To-Talk Button
+          // Translation Mode Indicator & Quick Switch Pill
+          InkWell(
+            onTap: () => controller.toggleMt(),
+            borderRadius: BorderRadius.circular(20),
+            child: Container(
+              margin: const EdgeInsets.only(top: 2, bottom: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+              decoration: BoxDecoration(
+                color: controller.isMtEnabled
+                    ? theme.colorScheme.primaryContainer.withAlpha(40)
+                    : theme.colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: controller.isMtEnabled
+                      ? theme.colorScheme.primary.withAlpha(120)
+                      : theme.colorScheme.outline.withAlpha(60),
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.translate_rounded,
+                    size: 14,
+                    color: controller.isMtEnabled
+                        ? theme.colorScheme.primary
+                        : theme.colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    controller.isMtEnabled
+                        ? 'MT ACTIVE: Translating to ${_languages.firstWhere((l) => l.$1 == controller.selectedLanguage, orElse: () => ('', controller.selectedLanguage)).$2}'
+                        : 'MT BYPASSED: Direct Audio Passthrough',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: controller.isMtEnabled
+                          ? theme.colorScheme.primary
+                          : theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Icon(
+                    controller.isMtEnabled ? Icons.toggle_on_rounded : Icons.toggle_off_rounded,
+                    size: 20,
+                    color: controller.isMtEnabled
+                        ? theme.colorScheme.primary
+                        : theme.colorScheme.onSurfaceVariant,
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // Large Push-To-Talk Button with Radar Pulse Rings
           Padding(
-            padding: const EdgeInsets.only(top: 12, bottom: 28),
+            padding: const EdgeInsets.only(top: 4, bottom: 26),
             child: GestureDetector(
               onTapDown: (_) => controller.onPttPressed(),
               onTapUp: (_) => controller.onPttReleased(),
               onTapCancel: () => controller.onPttReleased(),
-              child: ScaleTransition(
-                scale: _pulseAnimation,
-                child: Container(
-                  width: 124,
-                  height: 124,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: controller.isTransmitting
-                          ? [
-                              theme.colorScheme.error,
-                              const Color(0xFFB71C1C),
-                            ]
-                          : [
-                              theme.colorScheme.primary,
-                              const Color(0xFF0D47A1),
-                            ],
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  // Outer radar pulse ring when transmitting
+                  if (controller.isTransmitting)
+                    AnimatedBuilder(
+                      animation: _pulseController,
+                      builder: (context, child) {
+                        return Container(
+                          width: 124 * (1.0 + (_pulseController.value * 0.35)),
+                          height: 124 * (1.0 + (_pulseController.value * 0.35)),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: theme.colorScheme.error.withAlpha(
+                                ((1.0 - _pulseController.value) * 120).round(),
+                              ),
+                              width: 2.0,
+                            ),
+                          ),
+                        );
+                      },
                     ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: (controller.isTransmitting
-                                ? theme.colorScheme.error
-                                : theme.colorScheme.primary)
-                            .withAlpha(controller.isTransmitting ? 150 : 80),
-                        blurRadius: controller.isTransmitting ? 24 : 14,
-                        spreadRadius: controller.isTransmitting ? 4 : 0,
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        controller.isTransmitting
-                            ? Icons.mic_rounded
-                            : Icons.mic_none_rounded,
-                        size: 48,
-                        color: Colors.white,
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        controller.isTransmitting ? 'RECORDING' : 'HOLD PTT',
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 0.8,
+
+                  // Main PTT Circle Button
+                  ScaleTransition(
+                    scale: _pulseAnimation,
+                    child: Container(
+                      width: 124,
+                      height: 124,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: controller.isTransmitting
+                              ? [
+                                  theme.colorScheme.error,
+                                  const Color(0xFFB71C1C),
+                                ]
+                              : [
+                                  theme.colorScheme.primary,
+                                  const Color(0xFF0D47A1),
+                                ],
                         ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: (controller.isTransmitting
+                                    ? theme.colorScheme.error
+                                    : theme.colorScheme.primary)
+                                .withAlpha(controller.isTransmitting ? 160 : 90),
+                            blurRadius: controller.isTransmitting ? 28 : 16,
+                            spreadRadius: controller.isTransmitting ? 4 : 1,
+                          ),
+                        ],
                       ),
-                    ],
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            controller.isTransmitting
+                                ? Icons.mic_rounded
+                                : Icons.mic_none_rounded,
+                            size: 48,
+                            color: Colors.white,
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            controller.isTransmitting ? 'RECORDING' : 'HOLD PTT',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 1.0,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
-                ),
+                ],
               ),
             ),
           ),
         ],
       ),
+    );
+  }
+}
+
+class _WaveformBars extends StatelessWidget {
+  final AnimationController controller;
+
+  const _WaveformBars({required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, child) {
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: List.generate(4, (index) {
+            final phase = (controller.value + (index * 0.25)) % 1.0;
+            final height = 6.0 + (math.sin(phase * 2 * math.pi).abs() * 12.0);
+            return Container(
+              margin: const EdgeInsets.symmetric(horizontal: 1.5),
+              width: 2.8,
+              height: height,
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.error,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            );
+          }),
+        );
+      },
     );
   }
 }

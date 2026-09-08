@@ -124,6 +124,7 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
 
   // --- TTS ---
   final Map<String, sherpa.OfflineTts> _ttsEngines = {};
+  final List<String> _ttsEngineKeys = [];
 
   SherpaOnnxSpeechEngine({required this.languagePackManager});
 
@@ -249,34 +250,13 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
     }
   }
 
-  /// Performs live dynamic partial transcription as the user speaks
+  /// Performs live dynamic partial transcription as the user speaks.
+  /// Note: Only online streaming models (Zipformer) decode incrementally during recording.
+  /// Offline IndicConformer executes its complete CTC pass on audio completion to prevent UI thread freezing.
   void _runDynamicLiveDecode() {
-    if (!_isListening || _audioBuffer.length < 12000) return; // at least 0.75s of audio
+    if (!_isListening) return;
 
-    if (_isIndicConformer && _offlineRecognizer != null) {
-      try {
-        final floatSamples = Float32List(_audioBuffer.length);
-        for (int i = 0; i < _audioBuffer.length; i++) {
-          floatSamples[i] = _audioBuffer[i] / 32768.0;
-        }
-
-        final stream = _offlineRecognizer!.createStream();
-        stream.acceptWaveform(samples: floatSamples, sampleRate: 16000);
-        _offlineRecognizer!.decode(stream);
-        final rawText = _offlineRecognizer!.getResult(stream).text.trim();
-        stream.free();
-
-        if (rawText.isNotEmpty && rawText != _lastSttText) {
-          _lastSttText = rawText;
-          final processed = _currentLanguage == 'en'
-              ? IndicScriptTransliterator.toEnglish(rawText)
-              : rawText;
-          _sttTextController?.add(processed);
-        }
-      } catch (e) {
-        debugPrint('[STT Dynamic] Live decode error: $e');
-      }
-    } else if (_onlineRecognizer != null && _onlineStream != null) {
+    if (_onlineRecognizer != null && _onlineStream != null) {
       try {
         while (_onlineRecognizer!.isReady(_onlineStream!)) {
           _onlineRecognizer!.decode(_onlineStream!);
@@ -378,31 +358,47 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
   // ==========================================
 
   /// Initialize TTS for a given language from downloaded VITS ONNX model.
-  Future<bool> initTts(String languageCode) async {
-    if (_ttsEngines.containsKey(languageCode)) return true;
+  Future<bool> initTts(String languageCode, [String ttsEngineType = 'AI4BHARAT_RASA']) async {
+    final engineKey = '${languageCode}_$ttsEngineType';
+    if (_ttsEngines.containsKey(engineKey)) return true;
 
     try {
       final dir = await _modelsDir();
 
-      // 1. Check for AI4Bharat Multilingual Rasa-13 VITS model first (covers all languages)
       final rasaDir = p.join(dir, 'tts', 'rasa13');
       final rasaModel = p.join(rasaDir, 'vits.onnx');
       final rasaTokens = p.join(rasaDir, 'tokens.txt');
+
+      final mmsDir = p.join(dir, 'tts', languageCode);
+      final mmsModel = p.join(mmsDir, 'vits.onnx');
+      final mmsTokens = p.join(mmsDir, 'tokens.txt');
+      final mmsLexicon = p.join(mmsDir, 'lexicon.txt');
 
       String model;
       String tokens;
       String lexicon = '';
 
-      if (File(rasaModel).existsSync() && File(rasaTokens).existsSync()) {
-        model = rasaModel;
-        tokens = rasaTokens;
+      if (ttsEngineType == 'AI4BHARAT_RASA') {
+        if (File(rasaModel).existsSync() && File(rasaTokens).existsSync()) {
+          model = rasaModel;
+          tokens = rasaTokens;
+        } else if (File(mmsModel).existsSync() && File(mmsTokens).existsSync()) {
+          model = mmsModel;
+          tokens = mmsTokens;
+          lexicon = mmsLexicon;
+        } else {
+          return false;
+        }
       } else {
-        final ttsDir = p.join(dir, 'tts', languageCode);
-        model = p.join(ttsDir, 'vits.onnx');
-        tokens = p.join(ttsDir, 'tokens.txt');
-        lexicon = p.join(ttsDir, 'lexicon.txt');
-
-        if (!File(model).existsSync() || !File(tokens).existsSync()) {
+        // META_MMS requested
+        if (File(mmsModel).existsSync() && File(mmsTokens).existsSync()) {
+          model = mmsModel;
+          tokens = mmsTokens;
+          lexicon = mmsLexicon;
+        } else if (File(rasaModel).existsSync() && File(rasaTokens).existsSync()) {
+          model = rasaModel;
+          tokens = rasaTokens;
+        } else {
           return false;
         }
       }
@@ -422,78 +418,50 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
         ),
       );
 
-      _ttsEngines[languageCode] = sherpa.OfflineTts(config);
+      // Cap active in-memory TTS engines to 2 to prevent RAM bloat on mobile
+      if (_ttsEngines.length >= 2) {
+        final oldestKey = _ttsEngineKeys.removeAt(0);
+        final oldEngine = _ttsEngines.remove(oldestKey);
+        try {
+          oldEngine?.free();
+          debugPrint('[TTS] Evicted oldest TTS engine from RAM: $oldestKey');
+        } catch (e) {
+          debugPrint('[TTS] Error freeing evicted engine: $e');
+        }
+      }
+
+      _ttsEngines[engineKey] = sherpa.OfflineTts(config);
+      _ttsEngineKeys.add(engineKey);
       return true;
     } catch (e) {
-      debugPrint('[TTS] VITS engine init error for $languageCode: $e');
+      debugPrint('[TTS] VITS engine init error for $languageCode ($ttsEngineType): $e');
       return false;
     }
   }
 
   @override
-  Future<void> synthesizeSpeech(String text, String languageCode, [String gender = 'FEMALE']) async {
+  Future<void> synthesizeSpeech(
+    String text,
+    String languageCode, [
+    String gender = 'FEMALE',
+    String ttsEngineType = 'AI4BHARAT_RASA',
+  ]) async {
     if (text.trim().isEmpty) return;
 
     final isMale = gender.toUpperCase() == 'MALE';
+    final engineKey = '${languageCode}_$ttsEngineType';
 
-    // 1. High-fidelity native speech engine (with distinct pitch modulation for Male vs Female)
-    // Works identically across Android and all target platforms via AudioPlayer and local caching
+    // 1. On-device neural VITS model (AI4Bharat Rasa-13 or Meta MMS)
     try {
-      final baseDir = await getApplicationSupportDirectory();
-      final ttsCacheDir = Directory(p.join(baseDir.path, 'tts_cache'));
-      if (!await ttsCacheDir.exists()) {
-        await ttsCacheDir.create(recursive: true);
-      }
-
-      final phraseHash = text.hashCode.abs().toString();
-      final genderSuffix = isMale ? 'male' : 'female';
-      final cachedAudio = File(p.join(ttsCacheDir.path, '${languageCode}_${genderSuffix}_$phraseHash.mp3'));
-
-      if (!await cachedAudio.exists() || (await cachedAudio.length()) == 0) {
-        final langTag = languageCode == 'en' ? 'en-IN' : languageCode;
-        final uri = Uri.parse(
-          'https://translate.google.com/translate_tts?ie=UTF-8&q=${Uri.encodeComponent(text)}&tl=$langTag&client=tw-ob',
-        );
-
-        final client = HttpClient();
-        client.connectionTimeout = const Duration(seconds: 4);
-        final request = await client.getUrl(uri);
-        request.headers.set(HttpHeaders.userAgentHeader, 'Mozilla/5.0 (Linux; Android 14; Mobile)');
-        final response = await request.close();
-
-        if (response.statusCode == 200) {
-          final sink = cachedAudio.openWrite();
-          await response.pipe(sink);
-          client.close();
-        } else {
-          client.close();
-          throw HttpException('HTTP ${response.statusCode}');
-        }
-      }
-
-      if (await cachedAudio.exists() && (await cachedAudio.length()) > 0) {
-        debugPrint('[TTS] Playing authentic $genderSuffix voice playback: ${cachedAudio.path}');
-        await _audioPlayer.stop();
-        await _audioPlayer.play(DeviceFileSource(cachedAudio.path));
-        // Apply playback rate AFTER play starts so it is not overridden by audio player initialization
-        await Future.delayed(const Duration(milliseconds: 60));
-        await _audioPlayer.setPlaybackRate(isMale ? 0.72 : 1.10);
-        return;
-      }
-    } catch (e) {
-      debugPrint('[TTS] Native stream fetch error: $e, falling back to on-device neural model...');
-    }
-
-    // 2. On-device neural VITS model (Android native ARM64/ARMv7 JNI inference)
-    try {
-      final ready = await initTts(languageCode);
-      if (ready && _ttsEngines.containsKey(languageCode)) {
-        final tts = _ttsEngines[languageCode]!;
+      final ready = await initTts(languageCode, ttsEngineType);
+      if (ready && _ttsEngines.containsKey(engineKey)) {
+        final tts = _ttsEngines[engineKey]!;
         // sid: 0 = Female, 1 = Male on multi-speaker checkpoints
         final speakerId = isMale ? 1 : 0;
         final speed = isMale ? 0.88 : 1.05;
         final audio = tts.generate(text: text, sid: speakerId, speed: speed);
         if (audio.samples.isNotEmpty) {
+          debugPrint('[TTS] Generated audio via on-device $ttsEngineType for $languageCode ($gender)');
           await _playGeneratedAudio(audio.samples, audio.sampleRate, isMale);
           return;
         }
@@ -501,6 +469,12 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
     } catch (e) {
       debugPrint('[TTS] On-device VITS synthesis error: $e');
     }
+
+    // 2. Strict Offline Fallback: If on-device neural VITS model is not ready, notify user
+    debugPrint(
+      '[TTS] On-device VITS model for $languageCode ($gender) not found in storage. '
+      'Please download the language pack via Settings.',
+    );
   }
 
   /// Writes the generated Float32 samples to a WAV file and plays it via AudioPlayer.
@@ -587,25 +561,57 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
     return buffer.buffer.asUint8List();
   }
 
+
   @override
   void stopSpeech() {
     _audioPlayer.stop();
   }
 
   @override
+  bool get isSttLoaded => _offlineRecognizer != null || _onlineRecognizer != null;
+
+  @override
+  void unloadStt() {
+    _dynamicDecodeTimer?.cancel();
+    _dynamicDecodeTimer = null;
+    try {
+      _onlineStream?.free();
+    } catch (_) {}
+    _onlineStream = null;
+    try {
+      _onlineRecognizer?.free();
+    } catch (_) {}
+    _onlineRecognizer = null;
+    try {
+      _offlineRecognizer?.free();
+    } catch (_) {}
+    _offlineRecognizer = null;
+    _isIndicConformer = false;
+    _audioBuffer.clear();
+    debugPrint('[STT] Recognizer models successfully offloaded from RAM');
+  }
+
+  @override
+  bool get isTtsLoaded => _ttsEngines.isNotEmpty;
+
+  @override
+  void unloadTts() {
+    for (final tts in _ttsEngines.values) {
+      try {
+        tts.free();
+      } catch (_) {}
+    }
+    _ttsEngines.clear();
+    _ttsEngineKeys.clear();
+    debugPrint('[TTS] Neural VITS models successfully offloaded from RAM');
+  }
+
+  @override
   void release() {
     stopListening();
     stopSpeech();
-    _dynamicDecodeTimer?.cancel();
-    _dynamicDecodeTimer = null;
+    unloadStt();
+    unloadTts();
     _audioPlayer.dispose();
-    _onlineRecognizer?.free();
-    _onlineRecognizer = null;
-    _offlineRecognizer?.free();
-    _offlineRecognizer = null;
-    for (final tts in _ttsEngines.values) {
-      tts.free();
-    }
-    _ttsEngines.clear();
   }
 }

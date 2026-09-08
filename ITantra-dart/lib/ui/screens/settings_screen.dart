@@ -37,9 +37,15 @@ class SettingsScreen extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             // On-Demand Models Section
-            Text(
-              'Neural Models (On-Demand Download)',
-              style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+            Row(
+              children: [
+                Icon(Icons.psychology_rounded, size: 20, color: theme.colorScheme.primary),
+                const SizedBox(width: 8),
+                Text(
+                  'Neural Models (On-Demand Download)',
+                  style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                ),
+              ],
             ),
             const SizedBox(height: 8),
 
@@ -61,7 +67,9 @@ class SettingsScreen extends StatelessWidget {
                     // STT Status
                     _ModelStatusRow(
                       title: 'STT Engine (AI4Bharat IndicConformer INT8)',
+                      modelKey: 'stt',
                       isReady: settingsController.isSttReady,
+                      downloadState: settingsController.downloadState,
                       onDownload: () => settingsController.downloadStt(),
                       onDelete: () => settingsController.deleteStt(),
                     ),
@@ -70,7 +78,9 @@ class SettingsScreen extends StatelessWidget {
                     // MT Status
                     _ModelStatusRow(
                       title: 'MT Engine (AI4Bharat IndicTrans2 INT8 Quantized)',
+                      modelKey: 'mt',
                       isReady: settingsController.isMtReady,
+                      downloadState: settingsController.downloadState,
                       onDownload: () => settingsController.downloadMt(),
                       onDelete: () => settingsController.deleteMt(),
                     ),
@@ -79,7 +89,9 @@ class SettingsScreen extends StatelessWidget {
                     // AI4Bharat Universal TTS (Rasa-13)
                     _ModelStatusRow(
                       title: 'Universal TTS (AI4Bharat Rasa-13 VITS — All 13 Languages, ~123 MB)',
+                      modelKey: 'rasa13',
                       isReady: settingsController.isRasa13Ready,
+                      downloadState: settingsController.downloadState,
                       onDownload: () => settingsController.downloadRasa13(),
                       onDelete: () => settingsController.deleteRasa13(),
                     ),
@@ -88,11 +100,15 @@ class SettingsScreen extends StatelessWidget {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text(
-                          'TTS Voices — 10 Languages (Meta MMS / Indic)',
-                          style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+                        Flexible(
+                          child: Text(
+                            'TTS Voices — 10 Languages (Meta MMS / Indic)',
+                            style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                         Row(
+                          mainAxisSize: MainAxisSize.min,
                           children: [
                             TextButton.icon(
                               onPressed: () => settingsController.downloadAllLanguages(),
@@ -110,14 +126,16 @@ class SettingsScreen extends StatelessWidget {
                     ),
                     const SizedBox(height: 8),
 
-                    // 10 Language TTS Rows
+                    // 10 Language TTS Rows — each with inline progress bar
                     ...settingsController.languages.map((lang) {
                       final isReady = settingsController.isTtsReady(lang.code);
                       return Padding(
                         padding: const EdgeInsets.symmetric(vertical: 4),
                         child: _ModelStatusRow(
                           title: '${lang.nativeName} (${lang.englishName})',
+                          modelKey: 'tts_${lang.code}',
                           isReady: isReady,
+                          downloadState: settingsController.downloadState,
                           onDownload: () => settingsController.downloadTts(lang.code),
                           onDelete: () => settingsController.deleteTts(lang.code),
                         ),
@@ -125,30 +143,8 @@ class SettingsScreen extends StatelessWidget {
                     }),
                     const SizedBox(height: 14),
 
-                    // Download state indicator
-                    if (settingsController.downloadState is DownloadStateDownloading) ...[
-                      Builder(builder: (ctx) {
-                        final state =
-                            settingsController.downloadState as DownloadStateDownloading;
-                        return Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Downloading ${state.item}: ${state.progressPercent}%',
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: theme.colorScheme.primary,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                            LinearProgressIndicator(
-                              value: state.progressPercent / 100.0,
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                          ],
-                        );
-                      }),
-                    ] else if (settingsController.downloadState is DownloadStateCompleted) ...[
+                    // Global status message (completed / error only — no progress bar here)
+                    if (settingsController.downloadState is DownloadStateCompleted) ...[
                       Builder(builder: (ctx) {
                         final state =
                             settingsController.downloadState as DownloadStateCompleted;
@@ -179,9 +175,15 @@ class SettingsScreen extends StatelessWidget {
             const SizedBox(height: 20),
 
             // Primary Language Selector
-            Text(
-              'Speech Engine Calibration',
-              style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+            Row(
+              children: [
+                Icon(Icons.translate_rounded, size: 20, color: theme.colorScheme.primary),
+                const SizedBox(width: 8),
+                Text(
+                  'Speech Engine Calibration',
+                  style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                ),
+              ],
             ),
             const SizedBox(height: 8),
 
@@ -219,9 +221,15 @@ class SettingsScreen extends StatelessWidget {
             const SizedBox(height: 20),
 
             // Audio & Playback Controls
-            Text(
-              'Audio & Transceiver Calibration',
-              style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+            Row(
+              children: [
+                Icon(Icons.tune_rounded, size: 20, color: theme.colorScheme.primary),
+                const SizedBox(width: 8),
+                Text(
+                  'Audio & Transceiver Calibration',
+                  style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                ),
+              ],
             ),
             const SizedBox(height: 8),
 
@@ -231,6 +239,53 @@ class SettingsScreen extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    Text(
+                      'Active Neural TTS Engine (स्पीच इंजन चयन)',
+                      style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: double.infinity,
+                      child: SegmentedButton<String>(
+                        segments: [
+                          ButtonSegment(
+                            value: 'AI4BHARAT_RASA',
+                            icon: const Icon(Icons.hub_rounded),
+                            label: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Text('AI4Bharat Rasa-13'),
+                                if (settingsController.isRasa13Ready)
+                                  const Padding(
+                                    padding: EdgeInsets.only(left: 4),
+                                    child: Icon(Icons.check_circle_rounded, size: 14, color: Colors.greenAccent),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          ButtonSegment(
+                            value: 'META_MMS',
+                            icon: const Icon(Icons.language_rounded),
+                            label: const Text('Meta MMS VITS'),
+                          ),
+                        ],
+                        selected: {settings.ttsEngineType},
+                        onSelectionChanged: (set) {
+                          if (set.isNotEmpty) {
+                            settingsController.updateTtsEngineType(set.first);
+                          }
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      settings.ttsEngineType == 'AI4BHARAT_RASA'
+                          ? '🇮🇳 Sovereign Indian Stack: 1 single ~123MB pack covers all 13 Indian languages with native multi-speaker support.'
+                          : '🌐 Meta Massively Multilingual: Lightweight ~114MB single-language packs tailored per regional language.',
+                      style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                    ),
+                    const SizedBox(height: 16),
+
                     Text(
                       'Voice Gender (आवाज का प्रकार)',
                       style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
@@ -368,13 +423,17 @@ class SettingsScreen extends StatelessWidget {
 
 class _ModelStatusRow extends StatelessWidget {
   final String title;
+  final String modelKey;
   final bool isReady;
+  final DownloadState downloadState;
   final VoidCallback onDownload;
   final VoidCallback onDelete;
 
   const _ModelStatusRow({
     required this.title,
+    required this.modelKey,
     required this.isReady,
+    required this.downloadState,
     required this.onDownload,
     required this.onDelete,
   });
@@ -383,40 +442,116 @@ class _ModelStatusRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    // Check if THIS model is the one currently downloading
+    final isThisDownloading = downloadState is DownloadStateDownloading &&
+        (downloadState as DownloadStateDownloading).modelKey == modelKey;
+    final downloadPercent = isThisDownloading
+        ? (downloadState as DownloadStateDownloading).progressPercent
+        : 0;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title, style: theme.textTheme.bodyMedium),
-              const SizedBox(height: 2),
-              Text(
-                isReady ? '✅ Installed & Ready' : '⚠️ Not Installed',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: isReady ? const Color(0xFF00E676) : theme.colorScheme.error,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-        ),
-        if (!isReady)
-          ElevatedButton.icon(
-            onPressed: onDownload,
-            icon: const Icon(Icons.download_rounded, size: 16),
-            label: const Text('Download'),
-            style: ElevatedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // Status icon — fixed width for alignment
+            SizedBox(
+              width: 22,
+              child: isThisDownloading
+                  ? SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: theme.colorScheme.primary,
+                      ),
+                    )
+                  : Icon(
+                      isReady
+                          ? Icons.check_circle_rounded
+                          : Icons.download_rounded,
+                      size: 18,
+                      color: isReady
+                          ? const Color(0xFF00E676)
+                          : theme.colorScheme.onSurfaceVariant,
+                    ),
             ),
-          )
-        else
-          IconButton(
-            onPressed: onDelete,
-            tooltip: 'Delete Model',
-            icon: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent, size: 22),
+            const SizedBox(width: 10),
+
+            // Title + status text — expands to fill
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      height: 1.3,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 2,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    isThisDownloading
+                        ? '⬇ Downloading… $downloadPercent%'
+                        : isReady
+                            ? '✅ Installed & Ready'
+                            : '⚠️ Not Installed',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: isThisDownloading
+                          ? theme.colorScheme.primary
+                          : isReady
+                              ? const Color(0xFF00E676)
+                              : theme.colorScheme.error,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(width: 8),
+
+            // Action button
+            if (isThisDownloading)
+              const SizedBox(width: 48) // placeholder to keep alignment while downloading
+            else if (!isReady)
+              ElevatedButton.icon(
+                onPressed: onDownload,
+                icon: const Icon(Icons.download_rounded, size: 16),
+                label: const Text('Download'),
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                ),
+              )
+            else
+              IconButton(
+                onPressed: onDelete,
+                tooltip: 'Delete Model',
+                icon: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent, size: 22),
+              ),
+          ],
+        ),
+
+        // Inline progress bar below this row
+        if (isThisDownloading) ...[
+          const SizedBox(height: 6),
+          Padding(
+            padding: const EdgeInsets.only(left: 32),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: downloadPercent / 100.0,
+                minHeight: 4,
+                backgroundColor: theme.colorScheme.surfaceContainerHighest,
+                color: theme.colorScheme.primary,
+              ),
+            ),
           ),
+        ],
       ],
     );
   }
