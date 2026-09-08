@@ -389,4 +389,106 @@ class IndicTransEngine {
 
     return working;
   }
+
+  /// Automatically detects the language of a given text based on Unicode script
+  /// block frequency and key lexical markers across all 10 supported languages.
+  LanguageDetectionResult detectLanguage(String text) {
+    if (text.trim().isEmpty) {
+      return const LanguageDetectionResult(languageCode: 'en', confidence: 0.0);
+    }
+
+    final counts = <String, int>{
+      'devanagari': 0, // hi or mr
+      'gu': 0,
+      'bn': 0,
+      'or': 0,
+      'ta': 0,
+      'te': 0,
+      'kn': 0,
+      'ml': 0,
+      'en': 0,
+    };
+
+    int totalMeaningfulChars = 0;
+
+    for (final rune in text.runes) {
+      if (rune >= 0x0900 && rune <= 0x097F) {
+        counts['devanagari'] = (counts['devanagari'] ?? 0) + 1;
+        totalMeaningfulChars++;
+      } else if (rune >= 0x0A80 && rune <= 0x0AFF) {
+        counts['gu'] = (counts['gu'] ?? 0) + 1;
+        totalMeaningfulChars++;
+      } else if (rune >= 0x0980 && rune <= 0x09FF) {
+        counts['bn'] = (counts['bn'] ?? 0) + 1;
+        totalMeaningfulChars++;
+      } else if (rune >= 0x0B00 && rune <= 0x0B7F) {
+        counts['or'] = (counts['or'] ?? 0) + 1;
+        totalMeaningfulChars++;
+      } else if (rune >= 0x0B80 && rune <= 0x0BFF) {
+        counts['ta'] = (counts['ta'] ?? 0) + 1;
+        totalMeaningfulChars++;
+      } else if (rune >= 0x0C00 && rune <= 0x0C7F) {
+        counts['te'] = (counts['te'] ?? 0) + 1;
+        totalMeaningfulChars++;
+      } else if (rune >= 0x0C80 && rune <= 0x0CFF) {
+        counts['kn'] = (counts['kn'] ?? 0) + 1;
+        totalMeaningfulChars++;
+      } else if (rune >= 0x0D00 && rune <= 0x0D7F) {
+        counts['ml'] = (counts['ml'] ?? 0) + 1;
+        totalMeaningfulChars++;
+      } else if ((rune >= 0x0041 && rune <= 0x005A) ||
+          (rune >= 0x0061 && rune <= 0x007A)) {
+        counts['en'] = (counts['en'] ?? 0) + 1;
+        totalMeaningfulChars++;
+      }
+    }
+
+    if (totalMeaningfulChars == 0) {
+      return const LanguageDetectionResult(languageCode: 'en', confidence: 0.5);
+    }
+
+    // Find script with highest frequency
+    String bestScript = 'en';
+    int maxCount = 0;
+    counts.forEach((script, count) {
+      if (count > maxCount) {
+        maxCount = count;
+        bestScript = script;
+      }
+    });
+
+    final confidence = (maxCount / totalMeaningfulChars).clamp(0.0, 1.0);
+
+    // If Devanagari, disambiguate between Hindi and Marathi using vocabulary
+    if (bestScript == 'devanagari') {
+      final lower = text.toLowerCase();
+      // Marathi-specific markers (including ळ / \u0933)
+      final marathiMarkers = ['आहे', 'नाही', 'मदत', 'कसा', 'आहोत', 'कृपया', 'नमस्कार', 'ळ'];
+      bool isMarathi = marathiMarkers.any((m) => lower.contains(m));
+      return LanguageDetectionResult(
+        languageCode: isMarathi ? 'mr' : 'hi',
+        confidence: confidence,
+      );
+    }
+
+    return LanguageDetectionResult(
+      languageCode: bestScript,
+      confidence: confidence,
+    );
+  }
 }
+
+/// Represents the detected language code and statistical confidence
+class LanguageDetectionResult {
+  final String languageCode;
+  final double confidence;
+
+  const LanguageDetectionResult({
+    required this.languageCode,
+    required this.confidence,
+  });
+
+  @override
+  String toString() => '$languageCode (${(confidence * 100).toStringAsFixed(1)}%)';
+}
+

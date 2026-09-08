@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import '../proto/transceiver_packet.dart';
+import 'ble_fallback_transport.dart';
 
 class PeerLinkStats {
   final String ipAddress;
@@ -35,6 +36,9 @@ class TransceiverManager {
   final Map<String, Socket> _peerSockets = {};
   final Map<String, PeerLinkStats> _peerStats = {};
 
+  final BleFallbackTransport bleTransport = BleFallbackTransport();
+  StreamSubscription<TransceiverPacket>? _bleSubscription;
+
   final _incomingPacketsController = StreamController<TransceiverPacket>.broadcast();
   Stream<TransceiverPacket> get incomingPackets => _incomingPacketsController.stream;
 
@@ -43,6 +47,13 @@ class TransceiverManager {
 
   final _statsController = StreamController<List<PeerLinkStats>>.broadcast();
   Stream<List<PeerLinkStats>> get statsStream => _statsController.stream;
+
+  String get activeTransportType {
+    if (_peerSockets.isNotEmpty) return 'Wi-Fi Direct / Mesh';
+    if (bleTransport.isConnected) return 'BLE Fallback (GATT)';
+    return 'None';
+  }
+
 
   bool _isRunning = false;
   bool get isRunning => _isRunning;
@@ -95,12 +106,20 @@ class TransceiverManager {
         },
       );
 
+      // Listen for BLE fallback packets if received
+      _bleSubscription?.cancel();
+      _bleSubscription = bleTransport.incomingPackets.listen((packet) {
+        totalPacketsReceived++;
+        _incomingPacketsController.add(packet);
+      });
+
       _startHeartbeat();
     } catch (e) {
       debugPrint('Failed to start transceiver server on port $port: $e');
       _connectionStateController.add('Port $port busy: $e');
     }
   }
+
 
   Future<bool> connectToPeer(String ipAddress, {int targetPort = port}) async {
     // Avoid self-connection
@@ -229,7 +248,13 @@ class TransceiverManager {
 
   Future<void> sendPacket(TransceiverPacket packet) async {
     if (_peerSockets.isEmpty) {
-      debugPrint('No connected peers to deliver packet.');
+      if (bleTransport.isConnected) {
+        debugPrint('[Transceiver] Wi-Fi peers unavailable. Routing via BLE fallback transport...');
+        totalPacketsSent++;
+        await bleTransport.sendPacket(packet);
+        return;
+      }
+      debugPrint('No connected Wi-Fi or BLE peers to deliver packet.');
       return;
     }
 
@@ -292,8 +317,11 @@ class TransceiverManager {
 
   void dispose() {
     stop();
+    _bleSubscription?.cancel();
+    bleTransport.dispose();
     _incomingPacketsController.close();
     _connectionStateController.close();
     _statsController.close();
   }
 }
+
