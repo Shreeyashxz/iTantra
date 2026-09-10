@@ -13,3 +13,9 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# AI / Neural Model binaries (exceed GitHub 100MB limit)
+*.onnx
+**/converted_models/*.onnx
+**/converted_models_backup/
+

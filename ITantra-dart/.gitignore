@@ -43,3 +43,9 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# AI / Neural Model binaries (exceed GitHub limits)
+*.onnx
+converted_models/*.onnx
+converted_models_backup/
+
