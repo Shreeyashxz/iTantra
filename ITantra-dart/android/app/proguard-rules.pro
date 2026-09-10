@@ -19,6 +19,8 @@
 -keep class io.flutter.view.** { *; }
 -keep class io.flutter.** { *; }
 -keep class io.flutter.plugins.** { *; }
+-dontwarn com.google.android.play.core.**
+-dontwarn io.flutter.embedding.engine.deferredcomponents.**
 
 # 5. Audio and Media Players
 -keep class xyz.luan.audioplayers.** { *; }

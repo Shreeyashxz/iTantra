@@ -176,8 +176,83 @@ class _TransceiverScreenState extends State<TransceiverScreen>
               ),
             ),
           ),
+          // VAD (Voice Activity Detection) Hands-Free Quick Toggle
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+            child: InkWell(
+              onTap: () => controller.toggleVadMode(),
+              borderRadius: BorderRadius.circular(16),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: controller.isVadMode
+                      ? (controller.isVoiceDetected
+                          ? Colors.green.withAlpha(50)
+                          : theme.colorScheme.primary.withAlpha(35))
+                      : theme.colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: controller.isVadMode
+                        ? (controller.isVoiceDetected ? Colors.green : theme.colorScheme.primary)
+                        : theme.colorScheme.outline.withAlpha(80),
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      controller.isVadMode ? Icons.record_voice_over_rounded : Icons.voice_over_off_rounded,
+                      size: 14,
+                      color: controller.isVadMode
+                          ? (controller.isVoiceDetected ? Colors.greenAccent : theme.colorScheme.primary)
+                          : theme.colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      controller.isVadMode
+                          ? (controller.isVoiceDetected ? 'VOICE!' : 'VAD ON')
+                          : 'VAD OFF',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: controller.isVadMode
+                            ? (controller.isVoiceDetected ? Colors.greenAccent : theme.colorScheme.primary)
+                            : theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.bolt_rounded, color: Colors.amberAccent),
+            tooltip: 'Run JIT Pipeline (STT ➔ MT ➔ Mesh ➔ TTS)',
+            onPressed: () {
+              controller.triggerJitPipeline();
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  duration: const Duration(seconds: 2),
+                  backgroundColor: const Color(0xFF1E293B),
+                  content: Row(
+                    children: [
+                      const Icon(Icons.bolt_rounded, color: Colors.amberAccent, size: 18),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'JIT Pipeline Fired: STT ➔ MT ➔ Mesh ➔ TTS (${controller.selectedLanguage.toUpperCase()})',
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
           IconButton(
             icon: Icon(
+
               isConnected ? Icons.wifi_tethering_rounded : Icons.wifi_find_rounded,
               color: isConnected ? const Color(0xFF00E676) : null,
             ),
@@ -422,72 +497,182 @@ class _TransceiverScreenState extends State<TransceiverScreen>
             ),
           ),
 
-          // Translation Mode Indicator & Quick Switch Pill
-          InkWell(
-            onTap: () => controller.toggleMt(),
-            borderRadius: BorderRadius.circular(20),
-            child: Container(
-              margin: const EdgeInsets.only(top: 2, bottom: 6),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-              decoration: BoxDecoration(
-                color: controller.isMtEnabled
-                    ? theme.colorScheme.primaryContainer.withAlpha(40)
-                    : theme.colorScheme.surfaceContainerHighest,
+          // Translation Mode Indicator & Quick Switch Pill + RUN JIT Trigger
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              InkWell(
+                onTap: () => controller.toggleMt(),
                 borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: controller.isMtEnabled
-                      ? theme.colorScheme.primary.withAlpha(120)
-                      : theme.colorScheme.outline.withAlpha(60),
-                ),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.translate_rounded,
-                    size: 14,
+                child: Container(
+                  margin: const EdgeInsets.only(top: 2, bottom: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                  decoration: BoxDecoration(
                     color: controller.isMtEnabled
-                        ? theme.colorScheme.primary
-                        : theme.colorScheme.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    controller.isMtEnabled
-                        ? 'MT ACTIVE: Translating to ${_languages.firstWhere((l) => l.$1 == controller.selectedLanguage, orElse: () => ('', controller.selectedLanguage)).$2}'
-                        : 'MT BYPASSED: Direct Audio Passthrough',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
+                        ? theme.colorScheme.primaryContainer.withAlpha(40)
+                        : theme.colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
                       color: controller.isMtEnabled
-                          ? theme.colorScheme.primary
-                          : theme.colorScheme.onSurfaceVariant,
+                          ? theme.colorScheme.primary.withAlpha(120)
+                          : theme.colorScheme.outline.withAlpha(60),
                     ),
                   ),
-                  const SizedBox(width: 6),
-                  Icon(
-                    controller.isMtEnabled ? Icons.toggle_on_rounded : Icons.toggle_off_rounded,
-                    size: 20,
-                    color: controller.isMtEnabled
-                        ? theme.colorScheme.primary
-                        : theme.colorScheme.onSurfaceVariant,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.translate_rounded,
+                        size: 14,
+                        color: controller.isMtEnabled
+                            ? theme.colorScheme.primary
+                            : theme.colorScheme.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        controller.isMtEnabled
+                            ? 'MT ACTIVE: Translating to ${_languages.firstWhere((l) => l.$1 == controller.selectedLanguage, orElse: () => ('', controller.selectedLanguage)).$2}'
+                            : 'MT BYPASSED: Direct Audio Passthrough',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: controller.isMtEnabled
+                              ? theme.colorScheme.primary
+                              : theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Icon(
+                        controller.isMtEnabled ? Icons.toggle_on_rounded : Icons.toggle_off_rounded,
+                        size: 20,
+                        color: controller.isMtEnabled
+                            ? theme.colorScheme.primary
+                            : theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
+              const SizedBox(width: 8),
+              // Dedicated JIT Pipeline Trigger Button
+              Padding(
+                padding: const EdgeInsets.only(top: 2, bottom: 6),
+                child: InkWell(
+                  onTap: () {
+                    controller.triggerJitPipeline();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        duration: const Duration(seconds: 2),
+                        backgroundColor: const Color(0xFF1E293B),
+                        content: Row(
+                          children: [
+                            const Icon(Icons.bolt_rounded, color: Colors.amberAccent, size: 18),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'JIT Pipeline Triggered: STT ➔ MT (${controller.selectedLanguage.toUpperCase()}) ➔ Mesh ➔ TTS',
+                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                  borderRadius: BorderRadius.circular(20),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: Colors.amber.withAlpha(35),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: Colors.amberAccent.withAlpha(160),
+                        width: 1.0,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: const [
+                        Icon(Icons.bolt_rounded, size: 14, color: Colors.amberAccent),
+                        SizedBox(width: 4),
+                        Text(
+                          'RUN JIT',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.amberAccent,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+
+          // Live VAD (Voice Activity Detection) Status Badge
+          Container(
+            margin: const EdgeInsets.only(top: 2, bottom: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+            decoration: BoxDecoration(
+              color: controller.isVoiceDetected
+                  ? Colors.green.withAlpha(40)
+                  : (controller.isVadMode ? Colors.blue.withAlpha(25) : Colors.transparent),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: controller.isVoiceDetected
+                    ? Colors.greenAccent
+                    : (controller.isVadMode ? Colors.blueAccent.withAlpha(100) : Colors.transparent),
+                width: 1.0,
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: controller.isVoiceDetected
+                        ? Colors.greenAccent
+                        : (controller.isVadMode ? Colors.amberAccent : Colors.grey.withAlpha(120)),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  controller.isVoiceDetected
+                      ? 'VAD: VOICE DETECTED (Capturing Speech)'
+                      : (controller.isVadMode
+                          ? 'VAD ACTIVE: Listening Hands-Free...'
+                          : (controller.isTransmitting ? 'VAD: SILENCE (Pauses Gated)' : 'VAD: READY')),
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: controller.isVoiceDetected
+                        ? Colors.greenAccent
+                        : (controller.isVadMode ? Colors.amberAccent : theme.colorScheme.onSurfaceVariant.withAlpha(160)),
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ],
             ),
           ),
 
-          // Large Push-To-Talk Button with Radar Pulse Rings
+          // Large Push-To-Talk / VAD Hands-Free Button with Radar Pulse Rings
           Padding(
-            padding: const EdgeInsets.only(top: 4, bottom: 26),
+            padding: const EdgeInsets.only(top: 2, bottom: 26),
             child: GestureDetector(
-              onTapDown: (_) => controller.onPttPressed(),
-              onTapUp: (_) => controller.onPttReleased(),
-              onTapCancel: () => controller.onPttReleased(),
+              onTap: controller.isVadMode ? () => controller.toggleVadMode() : null,
+              onTapDown: controller.isVadMode ? null : (_) => controller.onPttPressed(),
+              onTapUp: controller.isVadMode ? null : (_) => controller.onPttReleased(),
+              onTapCancel: controller.isVadMode ? null : () => controller.onPttReleased(),
               child: Stack(
                 alignment: Alignment.center,
                 children: [
-                  // Outer radar pulse ring when transmitting
-                  if (controller.isTransmitting)
+                  // Outer radar pulse ring when transmitting or voice detected
+                  if (controller.isTransmitting || controller.isVoiceDetected)
                     AnimatedBuilder(
                       animation: _pulseController,
                       builder: (context, child) {
@@ -497,9 +682,8 @@ class _TransceiverScreenState extends State<TransceiverScreen>
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
                             border: Border.all(
-                              color: theme.colorScheme.error.withAlpha(
-                                ((1.0 - _pulseController.value) * 120).round(),
-                              ),
+                              color: (controller.isVoiceDetected ? Colors.green : theme.colorScheme.error)
+                                  .withAlpha(((1.0 - _pulseController.value) * 130).round()),
                               width: 2.0,
                             ),
                           ),
@@ -507,7 +691,7 @@ class _TransceiverScreenState extends State<TransceiverScreen>
                       },
                     ),
 
-                  // Main PTT Circle Button
+                  // Main Button Circle
                   ScaleTransition(
                     scale: _pulseAnimation,
                     child: Container(
@@ -518,24 +702,22 @@ class _TransceiverScreenState extends State<TransceiverScreen>
                         gradient: LinearGradient(
                           begin: Alignment.topLeft,
                           end: Alignment.bottomRight,
-                          colors: controller.isTransmitting
-                              ? [
-                                  theme.colorScheme.error,
-                                  const Color(0xFFB71C1C),
-                                ]
-                              : [
-                                  theme.colorScheme.primary,
-                                  const Color(0xFF0D47A1),
-                                ],
+                          colors: controller.isVadMode
+                              ? (controller.isVoiceDetected
+                                  ? [const Color(0xFF00C853), const Color(0xFF1B5E20)]
+                                  : [const Color(0xFF00897B), const Color(0xFF004D40)])
+                              : (controller.isTransmitting
+                                  ? [theme.colorScheme.error, const Color(0xFFB71C1C)]
+                                  : [theme.colorScheme.primary, const Color(0xFF0D47A1)]),
                         ),
                         boxShadow: [
                           BoxShadow(
-                            color: (controller.isTransmitting
-                                    ? theme.colorScheme.error
-                                    : theme.colorScheme.primary)
-                                .withAlpha(controller.isTransmitting ? 160 : 90),
-                            blurRadius: controller.isTransmitting ? 28 : 16,
-                            spreadRadius: controller.isTransmitting ? 4 : 1,
+                            color: (controller.isVadMode
+                                    ? (controller.isVoiceDetected ? Colors.green : Colors.teal)
+                                    : (controller.isTransmitting ? theme.colorScheme.error : theme.colorScheme.primary))
+                                .withAlpha(controller.isTransmitting || controller.isVoiceDetected ? 160 : 90),
+                            blurRadius: controller.isTransmitting || controller.isVoiceDetected ? 28 : 16,
+                            spreadRadius: controller.isTransmitting || controller.isVoiceDetected ? 4 : 1,
                           ),
                         ],
                       ),
@@ -543,21 +725,28 @@ class _TransceiverScreenState extends State<TransceiverScreen>
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           Icon(
-                            controller.isTransmitting
-                                ? Icons.mic_rounded
-                                : Icons.mic_none_rounded,
-                            size: 48,
+                            controller.isVadMode
+                                ? (controller.isVoiceDetected ? Icons.record_voice_over_rounded : Icons.hearing_rounded)
+                                : (controller.isTransmitting ? Icons.mic_rounded : Icons.mic_none_rounded),
+                            size: 44,
                             color: Colors.white,
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            controller.isTransmitting ? 'RECORDING' : 'HOLD PTT',
+                            controller.isVadMode
+                                ? (controller.isVoiceDetected ? 'SPEAKING' : 'VAD ACTIVE')
+                                : (controller.isTransmitting ? 'RECORDING' : 'HOLD PTT'),
                             style: theme.textTheme.labelSmall?.copyWith(
                               color: Colors.white,
                               fontWeight: FontWeight.bold,
                               letterSpacing: 1.0,
                             ),
                           ),
+                          if (controller.isVadMode)
+                            const Text(
+                              '(Hands-free)',
+                              style: TextStyle(fontSize: 8.5, color: Colors.white70, fontWeight: FontWeight.w500),
+                            ),
                         ],
                       ),
                     ),

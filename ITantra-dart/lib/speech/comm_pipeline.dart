@@ -21,6 +21,15 @@ class CommPipeline {
   String? _currentSenderId;
   String? _currentLanguageCode;
   void Function(String)? _onTranscriptCallback;
+  void Function(bool isVoiceDetected)? _onVoiceDetectedCallback;
+
+  bool _isVoiceDetected = false;
+  bool get isVoiceDetected => _isVoiceDetected;
+
+  bool _isVadAutoMode = false;
+  bool get isVadAutoMode => _isVadAutoMode;
+  Timer? _vadSilenceTimer;
+  bool _hasActiveUtterance = false;
 
   CommPipeline({
     required this.audioRecorder,
@@ -33,11 +42,13 @@ class CommPipeline {
     required String senderId,
     required String languageCode,
     void Function(String partialText)? onTranscript,
+    void Function(bool isVoiceDetected)? onVoiceDetected,
   }) async {
     _isTransmitting = true;
     _currentSenderId = senderId;
     _currentLanguageCode = languageCode;
     _onTranscriptCallback = onTranscript;
+    _onVoiceDetectedCallback = onVoiceDetected;
 
     final audioStream = await audioRecorder.startRecording();
     final vadStream = vadEngine.startVad(audioStream);
@@ -47,6 +58,9 @@ class CommPipeline {
 
     _vadSubscription?.cancel();
     _vadSubscription = vadStream.listen((isSpeech) {
+      _isVoiceDetected = isSpeech;
+      _onVoiceDetectedCallback?.call(isSpeech);
+
       if (isSpeech && !isSpeechActive) {
         // C3: Speech onset — flush pre-speech lookback buffer to avoid clipping first syllable
         for (final frame in vadEngine.lookbackBuffer) {
@@ -80,6 +94,7 @@ class CommPipeline {
     });
   }
 
+
   Future<void> sendUtterance({
     required String senderId,
     required String languageCode,
@@ -98,6 +113,8 @@ class CommPipeline {
 
   Future<void> stopTransmission() async {
     _isTransmitting = false;
+    _isVoiceDetected = false;
+    _onVoiceDetectedCallback?.call(false);
 
     await _audioSubscription?.cancel();
     _audioSubscription = null;
@@ -127,7 +144,94 @@ class CommPipeline {
     _onTranscriptCallback = null;
   }
 
+  /// Starts Hands-Free VAD Auto-Mode:
+  /// Continuously monitors microphone with Silero VAD; automatically records upon speech
+  /// detection and finalizes/transmits upon 1.2s silence without requiring PTT button presses.
+  Future<void> startVadAutoMode({
+    required String senderId,
+    required String languageCode,
+    void Function(String partialText)? onTranscript,
+    void Function(bool isVoiceDetected)? onVoiceDetected,
+  }) async {
+    if (_isVadAutoMode) return;
+    _isVadAutoMode = true;
+    _currentSenderId = senderId;
+    _currentLanguageCode = languageCode;
+    _onTranscriptCallback = onTranscript;
+    _onVoiceDetectedCallback = onVoiceDetected;
+
+    final audioStream = await audioRecorder.startRecording();
+    final vadStream = vadEngine.startVad(audioStream);
+
+    _vadSubscription?.cancel();
+    _vadSubscription = vadStream.listen((isSpeech) async {
+      _isVoiceDetected = isSpeech;
+      _onVoiceDetectedCallback?.call(isSpeech);
+
+      if (isSpeech) {
+        _vadSilenceTimer?.cancel();
+        _vadSilenceTimer = null;
+
+        if (!_hasActiveUtterance) {
+          _hasActiveUtterance = true;
+          _isTransmitting = true;
+          speechEngine.startListening();
+          for (final frame in vadEngine.lookbackBuffer) {
+            speechEngine.feedAudioData(frame);
+          }
+        }
+      } else {
+        if (_hasActiveUtterance && _vadSilenceTimer == null) {
+          _vadSilenceTimer = Timer(const Duration(milliseconds: 1200), () async {
+            if (!_hasActiveUtterance) return;
+            _hasActiveUtterance = false;
+            _isTransmitting = false;
+
+            final transcript = await speechEngine.stopListeningAndTranscribe();
+            if (transcript.trim().isNotEmpty && _currentSenderId != null && _currentLanguageCode != null) {
+              _onTranscriptCallback?.call(transcript);
+              final packet = TransceiverPacket(
+                senderId: _currentSenderId!,
+                languageCode: _currentLanguageCode!,
+                transcript: transcript,
+                timestampMs: DateTime.now().millisecondsSinceEpoch,
+                type: PacketType.voice,
+              );
+              await transceiverManager.sendPacket(packet);
+            }
+          });
+        }
+      }
+    });
+
+    _audioSubscription?.cancel();
+    _audioSubscription = audioStream.listen((chunk) {
+      if (_hasActiveUtterance) {
+        speechEngine.feedAudioData(chunk);
+      }
+    });
+  }
+
+  Future<void> stopVadAutoMode() async {
+    _isVadAutoMode = false;
+    _hasActiveUtterance = false;
+    _isTransmitting = false;
+    _isVoiceDetected = false;
+    _vadSilenceTimer?.cancel();
+    _vadSilenceTimer = null;
+    _onVoiceDetectedCallback?.call(false);
+
+    await _audioSubscription?.cancel();
+    _audioSubscription = null;
+    await _vadSubscription?.cancel();
+    _vadSubscription = null;
+    await audioRecorder.stopRecording();
+    vadEngine.stopVad();
+    speechEngine.stopListening();
+  }
+
   void dispose() {
     stopTransmission();
+    stopVadAutoMode();
   }
 }

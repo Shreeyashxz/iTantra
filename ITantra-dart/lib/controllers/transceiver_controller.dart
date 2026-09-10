@@ -41,7 +41,14 @@ class TransceiverController extends ChangeNotifier {
   bool _isMtEnabled = true;
   bool get isMtEnabled => _isMtEnabled;
 
+  bool _isVadMode = false;
+  bool get isVadMode => _isVadMode;
+
+  bool _isVoiceDetected = false;
+  bool get isVoiceDetected => _isVoiceDetected;
+
   int? get linkRttMs => transceiverManager.averageRttMs;
+
 
   StreamSubscription<TransceiverPacket>? _packetSubscription;
   StreamSubscription<AlertEvent?>? _alertSubscription;
@@ -156,6 +163,7 @@ class TransceiverController extends ChangeNotifier {
   }
 
   void onPttPressed() {
+    if (_isVadMode) return; // In VAD auto-mode, PTT is automatic
     if (!_isTransmitting) {
       _isTransmitting = true;
       notifyListeners();
@@ -165,17 +173,50 @@ class TransceiverController extends ChangeNotifier {
         onTranscript: (text) {
           // Live preview or partial transcripts
         },
+        onVoiceDetected: (isDetected) {
+          _isVoiceDetected = isDetected;
+          notifyListeners();
+        },
       );
     }
   }
 
   void onPttReleased() {
+    if (_isVadMode) return;
     if (_isTransmitting) {
       _isTransmitting = false;
+      _isVoiceDetected = false;
       notifyListeners();
       commPipeline.stopTransmission();
     }
   }
+
+  /// Toggles between PTT (Push-To-Talk) and VAD (Hands-Free Voice Activity Detection) mode
+  void toggleVadMode() {
+    _isVadMode = !_isVadMode;
+    if (_isVadMode) {
+      // Start continuous VAD auto-detection
+      commPipeline.startVadAutoMode(
+        senderId: deviceId,
+        languageCode: _selectedLanguage,
+        onTranscript: (text) {
+          // Live preview or partial transcripts
+        },
+        onVoiceDetected: (isDetected) {
+          _isVoiceDetected = isDetected;
+          _isTransmitting = commPipeline.isTransmitting;
+          notifyListeners();
+        },
+      );
+    } else {
+      // Stop continuous VAD and return to manual PTT
+      commPipeline.stopVadAutoMode();
+      _isTransmitting = false;
+      _isVoiceDetected = false;
+    }
+    notifyListeners();
+  }
+
 
   /// Broadcasts a voice or quiet-mode utterance through the mesh transceiver pipeline
   Future<void> sendUtterance(String text) async {
@@ -220,6 +261,14 @@ class TransceiverController extends ChangeNotifier {
 
   void toggleMt() {
     setMtEnabled(!_isMtEnabled);
+  }
+
+  /// Triggers a live Just-In-Time (JIT) end-to-end pipeline run:
+  /// Text -> Machine Translation -> Mesh Transmission -> Neural TTS Synthesis
+  Future<void> triggerJitPipeline([String? customText]) async {
+    final text = customText ?? (selectedLanguage == 'hi' ? 'आपातकालीन सहायता की आवश्यकता है' : 'Emergency assistance required immediately');
+    debugPrint('[JIT Pipeline] Executing Just-In-Time pipeline for: "$text"');
+    await sendUtterance(text);
   }
 
   Future<void> sendEmergencyAlert(String alertText, {String? languageCode}) async {

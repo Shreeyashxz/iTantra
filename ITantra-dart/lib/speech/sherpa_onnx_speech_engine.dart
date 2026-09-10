@@ -369,6 +369,10 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
       final rasaModel = p.join(rasaDir, 'vits.onnx');
       final rasaTokens = p.join(rasaDir, 'tokens.txt');
 
+      // Check bundled converted_models workspace fallback
+      final localRasaModel = File('converted_models/vits_rasa13_6in.onnx');
+      final localRasaTokens = File('converted_models/tokens.txt');
+
       final mmsDir = p.join(dir, 'tts', languageCode);
       final mmsModel = p.join(mmsDir, 'vits.onnx');
       final mmsTokens = p.join(mmsDir, 'tokens.txt');
@@ -382,11 +386,15 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
         if (File(rasaModel).existsSync() && File(rasaTokens).existsSync()) {
           model = rasaModel;
           tokens = rasaTokens;
+        } else if (localRasaModel.existsSync() && localRasaTokens.existsSync()) {
+          model = localRasaModel.path;
+          tokens = localRasaTokens.path;
         } else if (File(mmsModel).existsSync() && File(mmsTokens).existsSync()) {
           model = mmsModel;
           tokens = mmsTokens;
           lexicon = mmsLexicon;
         } else {
+          debugPrint('[TTS] Neither Rasa-13 nor MMS found for $languageCode');
           return false;
         }
       } else {
@@ -398,7 +406,11 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
         } else if (File(rasaModel).existsSync() && File(rasaTokens).existsSync()) {
           model = rasaModel;
           tokens = rasaTokens;
+        } else if (localRasaModel.existsSync() && localRasaTokens.existsSync()) {
+          model = localRasaModel.path;
+          tokens = localRasaTokens.path;
         } else {
+          debugPrint('[TTS] Meta MMS model not downloaded for $languageCode. Please download in Settings.');
           return false;
         }
       }
@@ -432,6 +444,7 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
 
       _ttsEngines[engineKey] = sherpa.OfflineTts(config);
       _ttsEngineKeys.add(engineKey);
+      debugPrint('[TTS] Initialized $ttsEngineType for $languageCode successfully');
       return true;
     } catch (e) {
       debugPrint('[TTS] VITS engine init error for $languageCode ($ttsEngineType): $e');
@@ -456,14 +469,19 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
       final ready = await initTts(languageCode, ttsEngineType);
       if (ready && _ttsEngines.containsKey(engineKey)) {
         final tts = _ttsEngines[engineKey]!;
-        // sid: 0 = Female, 1 = Male on multi-speaker checkpoints
-        final speakerId = isMale ? 1 : 0;
-        final speed = isMale ? 0.88 : 1.05;
+        // Meta MMS is single-speaker (sid MUST be 0, otherwise throws or produces silence)
+        // AI4Bharat Rasa-13 is multi-speaker (sid: 0 = Female, 1 = Male)
+        final isMms = ttsEngineType == 'META_MMS';
+        final speakerId = isMms ? 0 : (isMale ? 1 : 0);
+        final speed = isMale ? 0.92 : 1.02;
+
         final audio = tts.generate(text: text, sid: speakerId, speed: speed);
         if (audio.samples.isNotEmpty) {
-          debugPrint('[TTS] Generated audio via on-device $ttsEngineType for $languageCode ($gender)');
+          debugPrint('[TTS] Synthesized ${audio.samples.length} samples at ${audio.sampleRate}Hz via $ttsEngineType for $languageCode ($gender)');
           await _playGeneratedAudio(audio.samples, audio.sampleRate, isMale);
           return;
+        } else {
+          debugPrint('[TTS] VITS generator returned empty samples for text: "$text"');
         }
       }
     } catch (e) {
@@ -472,8 +490,8 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
 
     // 2. Strict Offline Fallback: If on-device neural VITS model is not ready, notify user
     debugPrint(
-      '[TTS] On-device VITS model for $languageCode ($gender) not found in storage. '
-      'Please download the language pack via Settings.',
+      '[TTS] On-device VITS model for $languageCode ($gender) not ready or pack not downloaded. '
+      'Please ensure model pack is installed in Settings.',
     );
   }
 

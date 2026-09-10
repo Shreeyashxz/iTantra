@@ -25,9 +25,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   project.set_dart_entrypoint_arguments(std::move(command_line_arguments));
 
   FlutterWindow window(project);
-  Win32Window::Point origin(10, 10);
-  Win32Window::Size size(1280, 720);
-  if (!window.Create(L"itantra_dart", origin, size)) {
+  Win32Window::Point origin(80, 40);
+  // Mobile portrait emulation dimension
+  Win32Window::Size size(450, 850);
+  if (!window.Create(L"iTantra - Mission Critical Transceiver", origin, size)) {
     return EXIT_FAILURE;
   }
   window.Show();
