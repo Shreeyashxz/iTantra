@@ -8,7 +8,9 @@ import 'package:provider/provider.dart';
 import '../../controllers/settings_controller.dart';
 import '../../controllers/transceiver_controller.dart';
 import '../../speech/audio_recorder_service.dart';
+import '../../speech/indic_trans_engine.dart';
 import '../../speech/language_pack_manager.dart';
+import '../../speech/sherpa_onnx_speech_engine.dart';
 import '../../speech/silero_vad_engine.dart';
 import '../theme/app_theme.dart';
 
@@ -40,15 +42,13 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
   // --- Model Engine In-Memory Statuses ---
   bool _isSttLoaded = false;
   bool _isSttLoading = false;
-  String _sttStatusMsg = 'Offloaded (0 MB RAM)';
-
   bool _isMtLoaded = true;
-  String _mtStatusMsg = 'IndicTrans2 Hybrid Ready';
-
-  bool _isTtsLoaded = false;
-  bool _isTtsLoading = false;
   String _activeTtsKey = '';
-  String _ttsStatusMsg = 'Offloaded (0 MB RAM)';
+
+  // --- Installed Model Check Status ---
+  late final LanguagePackManager _lpm;
+  Map<String, bool> _installedModels = {};
+  bool _isScanningFiles = false;
 
   // --- Preset Phrases for All 10 Supported Languages ---
   static const Map<String, String> _presets = {
@@ -168,11 +168,23 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
     super.initState();
     _recorder = AudioRecorderService();
     _vad = SileroVadEngine();
+    _lpm = LanguagePackManager();
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      // Auto-load STT and default TTS (Meta MMS, en) on startup so Test 1 and Test 2 are immediately warm
+      final commVad = context.read<TransceiverController>().commPipeline.vadEngine;
+      if (commVad is SileroVadEngine) {
+        _vad = commVad;
+      }
+      final currentEngine = context.read<SettingsController>().ttsEngineType;
+      setState(() {
+        _t2Engine = currentEngine;
+        _t3Engine = currentEngine;
+        _t4Engine = currentEngine;
+        _t5Engine = currentEngine;
+      });
+      _scanInstalledModels();
       _ensureSttLoaded();
-      _ensureTtsLoaded('en', 'META_MMS');
+      _ensureTtsLoaded(_t2Lang, currentEngine);
     });
   }
 
@@ -183,7 +195,7 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
     _vadSub?.cancel();
     _sttSub?.cancel();
     _recorder.dispose();
-    _vad.release();
+    _vad.stopVad();
     _t2Controller.dispose();
     _t5Controller.dispose();
     _t7Controller.dispose();
@@ -202,91 +214,145 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
   // MODEL ENGINE MANAGEMENT (ON-DEMAND LAZY LOADING & UNLOADING)
   // =========================================================================
 
-  Future<bool> _ensureSttLoaded() async {
-    if (_isSttLoaded) return true;
-    setState(() {
-      _isSttLoading = true;
-      _sttStatusMsg = 'Loading IndicConformer INT8 into RAM...';
-    });
+  Future<void> _scanInstalledModels() async {
+    if (!mounted) return;
+    setState(() => _isScanningFiles = true);
+    final results = <String, bool>{};
+    results['vad'] = true;
+    results['stt_int8'] = await _lpm.isSttAvailable();
+    results['stt_fp32'] = await _lpm.isSttFp32Available();
+    results['mt_int8'] = await _lpm.isMtAvailable();
+    results['mt_fp16'] = await _lpm.isMtFp16Available();
+    results['mt'] = (results['mt_int8'] ?? false) || (results['mt_fp16'] ?? false);
+    results['tts_rasa13'] = await _lpm.isRasa13Available();
+    for (final lang in LanguagePackManager.supportedLanguages) {
+      results['tts_mms_${lang.code}'] = await _lpm.isMmsAvailable(lang.code);
+    }
+    if (mounted) {
+      setState(() {
+        _installedModels = results;
+        _isScanningFiles = false;
+      });
+    }
+  }
+
+  // --- STT ---
+  Future<bool> _loadStt([String? precisionOverride]) async {
+    final precision = precisionOverride ?? context.read<SettingsController>().sttPrecision;
+    setState(() => _isSttLoading = true);
     final speech = context.read<TransceiverController>().speechEngine;
-    final ok = await speech.initStt();
+    final ok = await speech.initStt(precision);
     if (mounted) {
       setState(() {
         _isSttLoading = false;
         _isSttLoaded = ok;
-        _sttStatusMsg = ok
-            ? 'AI4Bharat IndicConformer INT8 (Loaded ~180MB)'
-            : 'STT not installed (Download in Settings)';
       });
     }
-    _log('STT Model load: ${ok ? "READY" : "FAILED"}');
+    _log('STT Model ($precision) load: ${ok ? "READY" : "FAILED"}');
     return ok;
+  }
+
+  Future<bool> _ensureSttLoaded() async {
+    if (_isSttLoaded) return true;
+    return _loadStt();
   }
 
   void _unloadStt() {
     final speech = context.read<TransceiverController>().speechEngine;
     speech.unloadStt();
-    setState(() {
-      _isSttLoaded = false;
-      _sttStatusMsg = 'Offloaded (0 MB RAM)';
-    });
-    _log('STT Model unloaded from RAM');
+    setState(() => _isSttLoaded = false);
+    _log('STT Model offloaded from RAM');
   }
 
-  Future<bool> _ensureTtsLoaded(String lang, String engineType) async {
+  // --- TTS ---
+  Future<bool> _loadTts(String lang, String engineType) async {
     final key = '${lang}_$engineType';
-    if (_isTtsLoaded && _activeTtsKey == key) return true;
-
-    setState(() {
-      _isTtsLoading = true;
-      _ttsStatusMsg = 'Loading $engineType ($lang) into RAM...';
-    });
     final speech = context.read<TransceiverController>().speechEngine;
     final ok = await speech.initTts(lang, engineType);
     if (mounted) {
       setState(() {
-        _isTtsLoading = false;
-        _isTtsLoaded = ok;
         _activeTtsKey = ok ? key : '';
-        _ttsStatusMsg = ok
-            ? '$engineType [$lang] (Loaded ~60MB)'
-            : 'Failed to load $engineType for [$lang]';
       });
     }
     _log('TTS Model ($engineType, $lang) load: ${ok ? "READY" : "FAILED"}');
     return ok;
   }
 
-  void _unloadTts() {
+  Future<bool> _ensureTtsLoaded(String lang, String engineType) async {
+    final key = '${lang}_$engineType';
+    final speech = context.read<TransceiverController>().speechEngine;
+    if (speech.isTtsKeyLoaded(key)) return true;
+    return _loadTts(lang, engineType);
+  }
+
+  void _unloadTtsKey(String key) {
+    final speech = context.read<TransceiverController>().speechEngine;
+    speech.unloadTtsKey(key);
+    setState(() {
+      if (_activeTtsKey == key) {
+        _activeTtsKey = speech.loadedTtsKeys.isNotEmpty ? speech.loadedTtsKeys.first : '';
+      }
+    });
+    _log('TTS Model [$key] offloaded from RAM');
+  }
+
+  void _unloadAllTts() {
     final speech = context.read<TransceiverController>().speechEngine;
     speech.unloadTts();
     setState(() {
-      _isTtsLoaded = false;
       _activeTtsKey = '';
-      _ttsStatusMsg = 'Offloaded (0 MB RAM)';
     });
-    _log('TTS Models unloaded from RAM');
+    _log('All TTS Models offloaded from RAM');
+  }
+
+  // --- MT ---
+  void _loadMt([String? precision]) {
+    final trans = context.read<TransceiverController>().transEngine;
+    trans.load(precision);
+    setState(() => _isMtLoaded = true);
+    _log('MT Model (${precision ?? trans.loadedPrecision}) loaded into RAM');
   }
 
   void _ensureMtLoaded() {
     if (_isMtLoaded) return;
-    final trans = context.read<TransceiverController>().transEngine;
-    trans.load();
-    setState(() {
-      _isMtLoaded = true;
-      _mtStatusMsg = 'IndicTrans2 Hybrid Ready';
-    });
-    _log('MT Model loaded into RAM');
+    _loadMt();
   }
 
   void _unloadMt() {
     final trans = context.read<TransceiverController>().transEngine;
     trans.unload();
-    setState(() {
-      _isMtLoaded = false;
-      _mtStatusMsg = 'Offloaded (0 MB RAM)';
-    });
+    setState(() => _isMtLoaded = false);
     _log('MT Model offloaded from RAM');
+  }
+
+  // --- VAD ---
+  Future<void> _loadVad() async {
+    final ok = await _vad.initNeuralVad();
+    setState(() {});
+    _log('Silero Neural VAD: ${ok ? "LOADED" : "FAILED"}');
+  }
+
+  void _unloadVad() {
+    _vad.unloadNeuralVad();
+    setState(() {});
+    _log('Silero Neural VAD offloaded from RAM (using adaptive RMS fallback)');
+  }
+
+  // --- Purge All Models ---
+  void _unloadAllModels() {
+    _unloadVad();
+    _unloadStt();
+    _unloadMt();
+    _unloadAllTts();
+    setState(() {});
+    _log('PURGE ALL: All neural models have been unloaded from system RAM (0 MB active)');
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('All neural models purged from RAM (0 MB active)'),
+        backgroundColor: Colors.teal,
+        duration: Duration(seconds: 2),
+      ),
+    );
   }
 
   // =========================================================================
@@ -920,150 +986,1088 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
     );
   }
 
-  // --- Top Model Status Dashboard ---
+  // --- Top Model Status Dashboard & Live Memory Manager ---
   Widget _buildModelStatusDashboard(ThemeData theme, bool isDark) {
+    final transceiver = context.watch<TransceiverController>();
+    final speech = transceiver.speechEngine;
+    final mt = transceiver.transEngine;
+    final vad = _vad;
+
+    final loadedTtsKeys = speech.loadedTtsKeys;
+    final isSttLoaded = speech.isSttLoaded;
+    final sttVariant = speech.loadedSttVariant ?? (_isSttLoaded ? 'IndicConformer' : null);
+    final isMtLoaded = mt.isLoaded;
+    final isVadLoaded = vad.isNeuralActive;
+
+    // Calculate dynamic memory footprint
+    int activeRamMb = 0;
+    int activeModelsCount = 0;
+    if (isVadLoaded) {
+      activeRamMb += 5;
+      activeModelsCount++;
+    }
+    if (isSttLoaded) {
+      activeModelsCount++;
+      if (sttVariant == 'IndicConformer FP32') {
+        activeRamMb += 550;
+      } else if (sttVariant == 'Zipformer Streaming') {
+        activeRamMb += 120;
+      } else {
+        activeRamMb += 180;
+      }
+    }
+    final mtPrecision = mt.loadedPrecision;
+    if (isMtLoaded) {
+      activeRamMb += (mtPrecision == 'FP16' ? 220 : 110);
+      activeModelsCount++;
+    }
+    for (final key in loadedTtsKeys) {
+      activeModelsCount++;
+      if (key.contains('RASA')) {
+        activeRamMb += 160;
+      } else {
+        activeRamMb += 145;
+      }
+    }
+
     return Container(
-      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: isDark ? AppTheme.darkSurfaceVariant : Colors.white,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: isDark ? Colors.white.withAlpha(25) : Colors.black.withAlpha(20),
+          color: isDark ? Colors.white.withAlpha(30) : Colors.black.withAlpha(25),
         ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              const Icon(Icons.memory_rounded, size: 18, color: AppTheme.accentCyan),
-              const SizedBox(width: 8),
-              Text(
-                'LIVE MODEL ENGINE STATUS',
-                style: theme.textTheme.labelMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1.0,
-                  color: AppTheme.accentCyan,
+          // Header Bar with RAM counter & Purge All button
+          Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(7),
+                  decoration: BoxDecoration(
+                    color: AppTheme.accentCyan.withAlpha(30),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(Icons.memory_rounded, size: 20, color: AppTheme.accentCyan),
                 ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'NEURAL MODELS & RAM MONITOR',
+                        style: theme.textTheme.labelMedium?.copyWith(
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 1.1,
+                          color: AppTheme.accentCyan,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Row(
+                        children: [
+                          Container(
+                            width: 8,
+                            height: 8,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: activeModelsCount > 0 ? AppTheme.telemetryGreen : Colors.grey,
+                              boxShadow: activeModelsCount > 0
+                                  ? [
+                                      BoxShadow(
+                                        color: AppTheme.telemetryGreen.withAlpha(120),
+                                        blurRadius: 6,
+                                        spreadRadius: 1,
+                                      )
+                                    ]
+                                  : null,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            activeModelsCount > 0
+                                ? '$activeModelsCount Active in RAM • ~$activeRamMb MB Allocated'
+                                : '0 Active Models • 0 MB RAM (Clean State)',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: activeModelsCount > 0 ? AppTheme.telemetryGreen : Colors.grey,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                if (activeModelsCount > 0)
+                  OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.redAccent,
+                      side: const BorderSide(color: Colors.redAccent, width: 1.2),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                    icon: const Icon(Icons.cleaning_services_rounded, size: 14),
+                    label: const Text('Purge All', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                    onPressed: _unloadAllModels,
+                  ),
+                const SizedBox(width: 6),
+                IconButton(
+                  icon: _isScanningFiles
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.refresh_rounded, size: 20),
+                  tooltip: 'Rescan model files & memory status',
+                  onPressed: _scanInstalledModels,
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+
+          // Active Models Chip Bar (shows live loaded instances with 1-tap unload)
+          if (activeModelsCount > 0)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              color: isDark ? Colors.black.withAlpha(40) : Colors.grey.shade100,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'CURRENTLY LOADED IN RAM (TAP TO UNLOAD EACH):',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.8,
+                      color: isDark ? Colors.white70 : Colors.black54,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      if (isVadLoaded)
+                        _buildActiveModelChip(
+                          label: 'Silero VAD (~5 MB)',
+                          color: const Color(0xFF00E676),
+                          onUnload: _unloadVad,
+                        ),
+                      if (isSttLoaded)
+                        _buildActiveModelChip(
+                          label: 'STT: ${sttVariant ?? "IndicConformer"} (~${sttVariant == "IndicConformer FP32" ? 550 : 180} MB)',
+                          color: Colors.lightBlueAccent,
+                          onUnload: _unloadStt,
+                        ),
+                      if (isMtLoaded)
+                        _buildActiveModelChip(
+                          label: 'MT: IndicTrans2 $mtPrecision (~${mtPrecision == "FP16" ? 220 : 110} MB)',
+                          color: Colors.amberAccent,
+                          onUnload: _unloadMt,
+                        ),
+                      ...loadedTtsKeys.map((key) {
+                        final isRasa = key.contains('RASA');
+                        final parts = key.split('_');
+                        final lang = parts.isNotEmpty ? parts[0] : '';
+                        final label = isRasa
+                            ? 'TTS: Rasa-13 Universal (~160 MB)'
+                            : 'TTS: Meta MMS [$lang] (~145 MB)';
+                        return _buildActiveModelChip(
+                          label: label,
+                          color: isRasa ? const Color(0xFFFF5252) : const Color(0xFFAB47BC),
+                          onUnload: () => _unloadTtsKey(key),
+                        );
+                      }),
+                    ],
+                  ),
+                ],
               ),
-            ],
-          ),
-          const SizedBox(height: 12),
+            ),
+          const Divider(height: 1),
 
-          // STT Badge
-          _buildEngineStatusRow(
-            name: 'STT: AI4Bharat IndicConformer INT8',
-            isLoaded: _isSttLoaded,
-            isLoading: _isSttLoading,
-            statusText: _sttStatusMsg,
-            onToggle: (enable) {
-              if (enable) {
-                _ensureSttLoaded();
-              } else {
-                _unloadStt();
-              }
-            },
-          ),
-          const Divider(height: 14),
+          // Models Fleet Detailed Controls
+          Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 1. VAD Row
+                _buildModelControlTile(
+                  icon: Icons.graphic_eq_rounded,
+                  iconColor: const Color(0xFF00E676),
+                  title: 'Silero Neural VAD',
+                  subtitle: isVadLoaded
+                      ? 'Active in RAM (~5 MB) • Real-time 512-sample neural voice detection'
+                      : 'Offloaded (0 MB) • Using Pure-Dart RMS Energy Fallback',
+                  isLoaded: isVadLoaded,
+                  isInstalled: true,
+                  onLoad: _loadVad,
+                  onUnload: _unloadVad,
+                ),
+                const Divider(height: 18),
 
-          // MT Badge
-          _buildEngineStatusRow(
-            name: 'MT: IndicTrans2 INT8 (Flores-10)',
-            isLoaded: _isMtLoaded,
-            isLoading: false,
-            statusText: _mtStatusMsg,
-            onToggle: (enable) {
-              if (enable) {
-                _ensureMtLoaded();
-              } else {
-                _unloadMt();
-              }
-            },
-          ),
-          const Divider(height: 14),
+                // 2. STT Section
+                _buildSttModelSection(theme, isDark, speech),
+                const Divider(height: 18),
 
-          // TTS Badge
-          _buildEngineStatusRow(
-            name: 'TTS: Meta MMS VITS / IndicTTS',
-            isLoaded: _isTtsLoaded,
-            isLoading: _isTtsLoading,
-            statusText: _ttsStatusMsg,
-            onToggle: (enable) {
-              if (enable) {
-                _ensureTtsLoaded('en', 'META_MMS');
-              } else {
-                _unloadTts();
-              }
-            },
+                // 3. MT Section
+                _buildMtModelSection(theme, isDark, mt),
+                const Divider(height: 18),
+
+                // 4. TTS Fleet Section
+                _buildTtsFleetSection(theme, isDark, speech),
+              ],
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildEngineStatusRow({
-    required String name,
+  Widget _buildActiveModelChip({
+    required String label,
+    required Color color,
+    required VoidCallback onUnload,
+  }) {
+    return Container(
+      padding: const EdgeInsets.only(left: 10, right: 4, top: 4, bottom: 4),
+      decoration: BoxDecoration(
+        color: color.withAlpha(30),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withAlpha(120)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(shape: BoxShape.circle, color: color),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: color),
+          ),
+          const SizedBox(width: 4),
+          InkWell(
+            onTap: onUnload,
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              padding: const EdgeInsets.all(2),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.black.withAlpha(60),
+              ),
+              child: const Icon(Icons.close_rounded, size: 14, color: Colors.white),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildModelControlTile({
+    required IconData icon,
+    required Color iconColor,
+    required String title,
+    required String subtitle,
     required bool isLoaded,
-    required bool isLoading,
-    required String statusText,
-    required ValueChanged<bool> onToggle,
+    required bool isInstalled,
+    required VoidCallback onLoad,
+    required VoidCallback onUnload,
   }) {
     return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: iconColor.withAlpha(25),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon, size: 20, color: iconColor),
+        ),
+        const SizedBox(width: 10),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
                 children: [
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: isLoading
-                          ? Colors.orangeAccent
-                          : (isLoaded ? AppTheme.telemetryGreen : Colors.grey),
-                    ),
-                  ),
-                  const SizedBox(width: 6),
                   Flexible(
                     child: Text(
-                      name,
-                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
-                      overflow: TextOverflow.ellipsis,
+                      title,
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: isLoaded ? AppTheme.telemetryGreen.withAlpha(30) : Colors.grey.withAlpha(30),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(
+                        color: isLoaded ? AppTheme.telemetryGreen : Colors.grey,
+                        width: 0.8,
+                      ),
+                    ),
+                    child: Text(
+                      isLoaded ? 'IN RAM' : (isInstalled ? 'OFFLOADED' : 'NOT INSTALLED'),
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                        color: isLoaded ? AppTheme.telemetryGreen : Colors.grey,
+                      ),
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 2),
+              const SizedBox(height: 3),
               Text(
-                statusText,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: isLoaded ? AppTheme.telemetryGreen : Colors.grey,
-                ),
+                subtitle,
+                style: const TextStyle(fontSize: 11, color: Colors.grey),
               ),
             ],
           ),
         ),
-        if (isLoading)
-          const SizedBox(
-            width: 20,
-            height: 20,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          )
-        else
-          Transform.scale(
-            scale: 0.8,
-            child: Switch(
-              value: isLoaded,
-              activeThumbColor: AppTheme.accentCyan,
-              activeTrackColor: AppTheme.accentCyan.withAlpha(100),
-              onChanged: onToggle,
+        const SizedBox(width: 8),
+        if (isLoaded)
+          OutlinedButton(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.redAccent,
+              side: const BorderSide(color: Colors.redAccent),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
+            onPressed: onUnload,
+            child: const Text('Unload', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+          )
+        else if (isInstalled)
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: iconColor.withAlpha(200),
+              foregroundColor: Colors.black,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: onLoad,
+            child: const Text('Load', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
           ),
       ],
+    );
+  }
+
+  Widget _buildSttModelSection(ThemeData theme, bool isDark, SherpaOnnxSpeechEngine speech) {
+    final isSttLoaded = speech.isSttLoaded;
+    final activeVariant = speech.loadedSttVariant ?? (_isSttLoaded ? 'IndicConformer' : null);
+    final isInt8Active = isSttLoaded && activeVariant != null && activeVariant.contains('INT8');
+    final isFp32Active = isSttLoaded && activeVariant != null && activeVariant.contains('FP32');
+
+    final isInt8Installed = _installedModels['stt_int8'] ?? false;
+    final isFp32Installed = _installedModels['stt_fp32'] ?? false;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.lightBlueAccent.withAlpha(25),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.mic_rounded, size: 20, color: Colors.lightBlueAccent),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Text(
+                        'AI4Bharat IndicConformer STT',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: isSttLoaded ? AppTheme.telemetryGreen.withAlpha(30) : Colors.grey.withAlpha(30),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: isSttLoaded ? AppTheme.telemetryGreen : Colors.grey,
+                            width: 0.8,
+                          ),
+                        ),
+                        child: Text(
+                          isSttLoaded ? 'ACTIVE IN RAM' : 'OFFLOADED',
+                          style: TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                            color: isSttLoaded ? AppTheme.telemetryGreen : Colors.grey,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    isSttLoaded
+                        ? 'Active Variant: $activeVariant • Offline CTC transcription'
+                        : 'No STT engine in RAM • Offloaded (0 MB)',
+                    style: const TextStyle(fontSize: 11, color: Colors.grey),
+                  ),
+                ],
+              ),
+            ),
+            if (isSttLoaded)
+              OutlinedButton(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.redAccent,
+                  side: const BorderSide(color: Colors.redAccent),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onPressed: _unloadStt,
+                child: const Text('Unload STT', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+              ),
+          ],
+        ),
+        const SizedBox(height: 10),
+
+        // Two sub-cards: INT8 and FP32
+        Row(
+          children: [
+            Expanded(
+              child: _buildSttVariantCard(
+                title: 'INT8 Fast (~180 MB)',
+                isInstalled: isInt8Installed,
+                isActive: isInt8Active,
+                isLoading: _isSttLoading && isInt8Active,
+                onLoad: () => _loadStt('INT8'),
+                onUnload: _unloadStt,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _buildSttVariantCard(
+                title: 'FP32 Studio (~550 MB)',
+                isInstalled: isFp32Installed,
+                isActive: isFp32Active,
+                isLoading: _isSttLoading && isFp32Active,
+                onLoad: () => _loadStt('FP32'),
+                onUnload: _unloadStt,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSttVariantCard({
+    required String title,
+    required bool isInstalled,
+    required bool isActive,
+    required bool isLoading,
+    required VoidCallback onLoad,
+    required VoidCallback onUnload,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: isActive ? Colors.lightBlueAccent.withAlpha(25) : Colors.black.withAlpha(20),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: isActive ? Colors.lightBlueAccent : Colors.grey.withAlpha(50),
+          width: isActive ? 1.4 : 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                title,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  color: isActive ? Colors.lightBlueAccent : null,
+                ),
+              ),
+              Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: isActive
+                      ? AppTheme.telemetryGreen
+                      : (isInstalled ? Colors.blueGrey : Colors.grey),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                isInstalled ? (isActive ? 'Active in RAM' : 'On Disk') : 'Not Installed',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: isActive ? AppTheme.telemetryGreen : Colors.grey,
+                ),
+              ),
+              if (isActive)
+                InkWell(
+                  onTap: onUnload,
+                  child: const Text(
+                    'Unload',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.redAccent,
+                    ),
+                  ),
+                )
+              else if (isInstalled)
+                InkWell(
+                  onTap: onLoad,
+                  child: const Text(
+                    'Load',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.lightBlueAccent,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMtModelSection(ThemeData theme, bool isDark, IndicTransEngine mt) {
+    final isMtLoaded = mt.isLoaded;
+    final activePrecision = mt.loadedPrecision; // 'INT8' or 'FP16'
+    final isInt8Active = isMtLoaded && activePrecision == 'INT8';
+    final isFp16Active = isMtLoaded && activePrecision == 'FP16';
+
+    final isInt8Installed = _installedModels['mt_int8'] ?? false;
+    final isFp16Installed = _installedModels['mt_fp16'] ?? false;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.amberAccent.withAlpha(25),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.translate_rounded, size: 20, color: Colors.amberAccent),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Text(
+                        'AI4Bharat IndicTrans2 MT',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: isMtLoaded ? AppTheme.telemetryGreen.withAlpha(30) : Colors.grey.withAlpha(30),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: isMtLoaded ? AppTheme.telemetryGreen : Colors.grey,
+                            width: 0.8,
+                          ),
+                        ),
+                        child: Text(
+                          isMtLoaded ? 'ACTIVE IN RAM' : 'OFFLOADED',
+                          style: TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                            color: isMtLoaded ? AppTheme.telemetryGreen : Colors.grey,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    isMtLoaded
+                        ? 'Active Variant: IndicTrans2 $activePrecision • Neural translation across 10 Indic languages'
+                        : 'Offloaded (0 MB) • Tactical emergency lexicon fallback only',
+                    style: const TextStyle(fontSize: 11, color: Colors.grey),
+                  ),
+                ],
+              ),
+            ),
+            if (isMtLoaded)
+              OutlinedButton(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.redAccent,
+                  side: const BorderSide(color: Colors.redAccent),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onPressed: _unloadMt,
+                child: const Text('Unload MT', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+              ),
+          ],
+        ),
+        const SizedBox(height: 10),
+
+        // Two sub-cards: INT8 and FP16
+        Row(
+          children: [
+            Expanded(
+              child: _buildMtVariantCard(
+                title: 'INT8 Fast (~110 MB)',
+                isInstalled: isInt8Installed,
+                isActive: isInt8Active,
+                onLoad: () => _loadMt('INT8'),
+                onUnload: _unloadMt,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _buildMtVariantCard(
+                title: 'FP16 Studio (~220 MB)',
+                isInstalled: isFp16Installed,
+                isActive: isFp16Active,
+                onLoad: () => _loadMt('FP16'),
+                onUnload: _unloadMt,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMtVariantCard({
+    required String title,
+    required bool isInstalled,
+    required bool isActive,
+    required VoidCallback onLoad,
+    required VoidCallback onUnload,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: isActive ? Colors.amberAccent.withAlpha(25) : Colors.black.withAlpha(20),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: isActive ? Colors.amberAccent : Colors.grey.withAlpha(50),
+          width: isActive ? 1.4 : 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                title,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  color: isActive ? Colors.amberAccent : null,
+                ),
+              ),
+              Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: isActive
+                      ? AppTheme.telemetryGreen
+                      : (isInstalled ? Colors.blueGrey : Colors.grey),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                isInstalled ? (isActive ? 'Active in RAM' : 'On Disk') : 'Not Installed',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: isActive ? AppTheme.telemetryGreen : Colors.grey,
+                ),
+              ),
+              if (isActive)
+                InkWell(
+                  onTap: onUnload,
+                  child: const Text(
+                    'Unload',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.redAccent,
+                    ),
+                  ),
+                )
+              else if (isInstalled)
+                InkWell(
+                  onTap: onLoad,
+                  child: const Text(
+                    'Load',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.amberAccent,
+                    ),
+                  ),
+                )
+              else
+                const Text(
+                  'In Settings',
+                  style: TextStyle(fontSize: 9, color: Colors.grey),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTtsFleetSection(ThemeData theme, bool isDark, SherpaOnnxSpeechEngine speech) {
+    final loadedKeys = speech.loadedTtsKeys;
+    final isRasaLoaded = loadedKeys.any((k) => k.contains('RASA'));
+    final isRasaInstalled = _installedModels['tts_rasa13'] ?? false;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFAB47BC).withAlpha(25),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.record_voice_over_rounded, size: 20, color: Color(0xFFAB47BC)),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Text(
+                        'Neural TTS Engine Fleet',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: loadedKeys.isNotEmpty
+                              ? AppTheme.telemetryGreen.withAlpha(30)
+                              : Colors.grey.withAlpha(30),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: loadedKeys.isNotEmpty ? AppTheme.telemetryGreen : Colors.grey,
+                            width: 0.8,
+                          ),
+                        ),
+                        child: Text(
+                          loadedKeys.isNotEmpty ? '${loadedKeys.length} LOADED' : 'OFFLOADED',
+                          style: TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                            color: loadedKeys.isNotEmpty ? AppTheme.telemetryGreen : Colors.grey,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    loadedKeys.isNotEmpty
+                        ? '${loadedKeys.length} engine(s) active in RAM • Multi-voice speech synthesis'
+                        : 'No TTS engine in RAM • Offloaded (0 MB)',
+                    style: const TextStyle(fontSize: 11, color: Colors.grey),
+                  ),
+                ],
+              ),
+            ),
+            if (loadedKeys.isNotEmpty)
+              OutlinedButton(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.redAccent,
+                  side: const BorderSide(color: Colors.redAccent),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onPressed: _unloadAllTts,
+                child: const Text('Unload All TTS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+              ),
+          ],
+        ),
+        const SizedBox(height: 12),
+
+        // Sub-tier 1: Universal AI4Bharat Rasa-13 Model
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: isRasaLoaded ? const Color(0xFFFF5252).withAlpha(20) : Colors.black.withAlpha(20),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: isRasaLoaded ? const Color(0xFFFF5252) : Colors.grey.withAlpha(50),
+              width: isRasaLoaded ? 1.4 : 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Text(
+                          'AI4Bharat Rasa-13 Universal VITS (~160 MB)',
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(width: 8),
+                        if (isRasaLoaded)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: AppTheme.telemetryGreen.withAlpha(30),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: const Text(
+                              'ACTIVE',
+                              style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: AppTheme.telemetryGreen),
+                            ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    const Text(
+                      'Universal multi-accent Indic synthesizer • 1024 voices • 13 Indic languages',
+                      style: TextStyle(fontSize: 10, color: Colors.grey),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              if (isRasaLoaded)
+                OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.redAccent,
+                    side: const BorderSide(color: Colors.redAccent),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                  ),
+                  onPressed: () {
+                    for (final k in loadedKeys.where((k) => k.contains('RASA')).toList()) {
+                      _unloadTtsKey(k);
+                    }
+                  },
+                  child: const Text('Unload', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                )
+              else if (isRasaInstalled)
+                FilledButton(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFFFF5252).withAlpha(200),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                  ),
+                  onPressed: () async {
+                    context.read<SettingsController>().updateTtsEngineType('AI4BHARAT_RASA');
+                    await _loadTts('hi', 'AI4BHARAT_RASA');
+                    if (mounted) {
+                      setState(() {
+                        _t2Engine = 'AI4BHARAT_RASA';
+                        _t3Engine = 'AI4BHARAT_RASA';
+                        _t4Engine = 'AI4BHARAT_RASA';
+                        _t5Engine = 'AI4BHARAT_RASA';
+                      });
+                    }
+                  },
+                  child: const Text('Load', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                )
+              else
+                const Text('Not Installed', style: TextStyle(fontSize: 10, color: Colors.grey)),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // Sub-tier 2: Meta MMS Per-Language Models Grid
+        Text(
+          'META MMS DEDICATED MODELS (~145 MB EACH):',
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.8,
+            color: isDark ? Colors.white70 : Colors.black54,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: LanguagePackManager.supportedLanguages.map((meta) {
+            final key = '${meta.code}_META_MMS';
+            final isLoaded = speech.isTtsKeyLoaded(key);
+            final isInstalled = _installedModels['tts_mms_${meta.code}'] ?? false;
+
+            return _buildMmsLanguageCard(
+              meta: meta,
+              isLoaded: isLoaded,
+              isInstalled: isInstalled,
+              onLoad: () async {
+                context.read<SettingsController>().updateTtsEngineType('META_MMS');
+                await _loadTts(meta.code, 'META_MMS');
+                if (mounted) {
+                  setState(() {
+                    _t2Engine = 'META_MMS';
+                    _t2Lang = meta.code;
+                    _t3Engine = 'META_MMS';
+                    _t3Lang = meta.code;
+                    _t4Engine = 'META_MMS';
+                    _t5Engine = 'META_MMS';
+                  });
+                }
+              },
+              onUnload: () => _unloadTtsKey(key),
+            );
+          }).toList(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMmsLanguageCard({
+    required LanguageMetadata meta,
+    required bool isLoaded,
+    required bool isInstalled,
+    required VoidCallback onLoad,
+    required VoidCallback onUnload,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: isLoaded ? const Color(0xFFAB47BC).withAlpha(30) : Colors.black.withAlpha(20),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: isLoaded
+              ? const Color(0xFFAB47BC)
+              : (isInstalled ? Colors.grey.withAlpha(60) : Colors.grey.withAlpha(30)),
+          width: isLoaded ? 1.4 : 1,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 7,
+            height: 7,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: isLoaded
+                  ? AppTheme.telemetryGreen
+                  : (isInstalled ? Colors.blueGrey : Colors.grey.shade600),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            '${meta.englishName} (${meta.code})',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: isLoaded ? FontWeight.bold : FontWeight.normal,
+              color: isLoaded ? const Color(0xFFE1BEE7) : (isInstalled ? null : Colors.grey),
+            ),
+          ),
+          const SizedBox(width: 8),
+          if (isLoaded)
+            InkWell(
+              onTap: onUnload,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.redAccent.withAlpha(40),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: Colors.redAccent, width: 0.8),
+                ),
+                child: const Text(
+                  'Unload',
+                  style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.redAccent),
+                ),
+              ),
+            )
+          else if (isInstalled)
+            InkWell(
+              onTap: onLoad,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFAB47BC).withAlpha(40),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: const Color(0xFFAB47BC), width: 0.8),
+                ),
+                child: const Text(
+                  'Load',
+                  style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Color(0xFFE1BEE7)),
+                ),
+              ),
+            )
+          else
+            const Text('N/A', style: TextStyle(fontSize: 9, color: Colors.grey)),
+        ],
+      ),
     );
   }
 
@@ -1490,9 +2494,10 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
             children: [
               Expanded(
                 child: DropdownButtonFormField<String>(
+                  key: ValueKey('t2_$_t2Engine'),
                   initialValue: _t2Engine,
                   decoration: const InputDecoration(
-                    labelText: 'TTS Engine (Default: Meta MMS)',
+                    labelText: 'TTS Engine',
                     contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                   ),
                   items: const [
@@ -1502,6 +2507,7 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
                   onChanged: (val) {
                     if (val != null) {
                       setState(() => _t2Engine = val);
+                      context.read<SettingsController>().updateTtsEngineType(val);
                       _ensureTtsLoaded(_t2Lang, val);
                     }
                   },
@@ -1611,6 +2617,7 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
             children: [
               Expanded(
                 child: DropdownButtonFormField<String>(
+                  key: ValueKey('t3_$_t3Engine'),
                   initialValue: _t3Engine,
                   decoration: const InputDecoration(
                     labelText: 'Loopback TTS Engine',
@@ -1623,6 +2630,7 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
                   onChanged: (val) {
                     if (val != null) {
                       setState(() => _t3Engine = val);
+                      context.read<SettingsController>().updateTtsEngineType(val);
                       _ensureTtsLoaded(_t3Lang, val);
                     }
                   },
@@ -1709,6 +2717,7 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
             children: [
               Expanded(
                 child: DropdownButtonFormField<String>(
+                  key: ValueKey('t4_$_t4Engine'),
                   initialValue: _t4Engine,
                   decoration: const InputDecoration(
                     labelText: 'Target TTS Engine',
@@ -1721,6 +2730,7 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
                   onChanged: (val) {
                     if (val != null) {
                       setState(() => _t4Engine = val);
+                      context.read<SettingsController>().updateTtsEngineType(val);
                       _ensureTtsLoaded(_t4TargetLang, val);
                     }
                   },
@@ -1816,6 +2826,7 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
             children: [
               Expanded(
                 child: DropdownButtonFormField<String>(
+                  key: ValueKey('t5_$_t5Engine'),
                   initialValue: _t5Engine,
                   decoration: const InputDecoration(
                     labelText: 'Target TTS Engine',
@@ -1828,6 +2839,7 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
                   onChanged: (val) {
                     if (val != null) {
                       setState(() => _t5Engine = val);
+                      context.read<SettingsController>().updateTtsEngineType(val);
                       _ensureTtsLoaded(_t5TargetLang, val);
                     }
                   },

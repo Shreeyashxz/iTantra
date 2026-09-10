@@ -9,14 +9,19 @@ abstract class SpeechEngine {
     String text,
     String languageCode, [
     String gender = 'FEMALE',
-    String ttsEngineType = 'AI4BHARAT_RASA',
+    String ttsEngineType = 'META_MMS',
   ]);
   void stopSpeech();
 
   bool get isSttLoaded;
   void unloadStt();
+  String? get loadedSttVariant;
+
   bool get isTtsLoaded;
   void unloadTts();
+  List<String> get loadedTtsKeys;
+  bool isTtsKeyLoaded(String key);
+  void unloadTtsKey(String key);
 
   void release();
 }

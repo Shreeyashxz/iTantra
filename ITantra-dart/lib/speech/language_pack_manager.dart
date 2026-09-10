@@ -77,29 +77,48 @@ class LanguagePackManager {
   }
 
   Future<bool> isTtsAvailable(String languageCode) async {
-    final dir = await getModelsDirectory();
-    final rasaModel = File(p.join(dir.path, 'tts', 'rasa13', 'vits.onnx'));
-    final rasaTokens = File(p.join(dir.path, 'tts', 'rasa13', 'tokens.txt'));
-    if (await rasaModel.exists() && await rasaTokens.exists()) {
+    if (await isRasa13Available()) {
       return true;
     }
-    final model = File(p.join(dir.path, 'tts', languageCode, 'vits.onnx'));
-    final tokens = File(p.join(dir.path, 'tts', languageCode, 'tokens.txt'));
-    return await model.exists() && await tokens.exists();
+    return await isMmsAvailable(languageCode);
   }
 
   Future<bool> isRasa13Available() async {
+    final localRasaModel = File('converted_models/vits_rasa13_6in.onnx');
+    final localRasaTokens = File('converted_models/tokens.txt');
+    if (localRasaModel.existsSync() &&
+        localRasaTokens.existsSync() &&
+        localRasaModel.lengthSync() > 10 * 1024 * 1024) {
+      return true;
+    }
     final dir = await getModelsDirectory();
     final model = File(p.join(dir.path, 'tts', 'rasa13', 'vits.onnx'));
     final tokens = File(p.join(dir.path, 'tts', 'rasa13', 'tokens.txt'));
-    return await model.exists() && await tokens.exists();
+    if (!await model.exists() || !await tokens.exists()) return false;
+    return (await model.length()) > 10 * 1024 * 1024;
+  }
+
+  Future<bool> isMmsAvailable(String languageCode) async {
+    final dir = await getModelsDirectory();
+    final model = File(p.join(dir.path, 'tts', languageCode, 'vits.onnx'));
+    final tokens = File(p.join(dir.path, 'tts', languageCode, 'tokens.txt'));
+    if (!await model.exists() || !await tokens.exists()) return false;
+    return (await model.length()) > 10 * 1024 * 1024;
   }
 
   Future<bool> isSttAvailable() async {
     final dir = await getModelsDirectory();
     final indic = File(p.join(dir.path, 'stt', 'indic_conformer.onnx'));
     final tokens = File(p.join(dir.path, 'stt', 'tokens.txt'));
-    return await indic.exists() && await tokens.exists();
+    if (!await indic.exists() || !await tokens.exists()) return false;
+    return (await indic.length()) > 10 * 1024 * 1024;
+  }
+
+  Future<bool> isSttFp32Available() async {
+    final dir = await getModelsDirectory();
+    final indicFp32 = File(p.join(dir.path, 'stt', 'indic_conformer_fp32.onnx'));
+    final tokens = File(p.join(dir.path, 'stt', 'tokens.txt'));
+    return await indicFp32.exists() && await tokens.exists();
   }
 
   Future<bool> isMtAvailable() async {
@@ -107,6 +126,15 @@ class LanguagePackManager {
     final model = File(p.join(dir.path, 'mt', 'indictrans2_int8.onnx'));
     final spm = File(p.join(dir.path, 'mt', 'spm.model'));
     return await model.exists() && await spm.exists();
+  }
+
+  Future<bool> isMtFp16Available() async {
+    final dir = await getModelsDirectory();
+    final model = File(p.join(dir.path, 'mt', 'indictrans2_fp16.onnx'));
+    final data = File(p.join(dir.path, 'mt', 'encoder_model.onnx.data'));
+    final spm = File(p.join(dir.path, 'mt', 'spm.model'));
+    if (!await model.exists() || !await data.exists() || !await spm.exists()) return false;
+    return (await data.length()) > 50 * 1024 * 1024;
   }
 
   Future<bool> downloadMt() async {
@@ -143,8 +171,56 @@ class LanguagePackManager {
       _emitState(const DownloadStateCompleted('AI4Bharat IndicTrans2 INT8 Ready'));
       return true;
     } catch (e) {
-      debugPrint('Error downloading IndicTrans2 MT: $e');
-      _emitState(DownloadStateError('IndicTrans2 MT download failed: $e'));
+      debugPrint('Error downloading IndicTrans2 INT8 MT: $e');
+      _emitState(DownloadStateError('IndicTrans2 INT8 MT download failed: $e'));
+      return false;
+    }
+  }
+
+  Future<bool> downloadMtFp16() async {
+    final modelsDir = await getModelsDirectory();
+    final mtDir = Directory(p.join(modelsDir.path, 'mt'));
+    if (!await mtDir.exists()) {
+      await mtDir.create(recursive: true);
+    }
+
+    final targetModel = File(p.join(mtDir.path, 'indictrans2_fp16.onnx'));
+    final targetData = File(p.join(mtDir.path, 'encoder_model.onnx.data'));
+    final targetSpm = File(p.join(mtDir.path, 'spm.model'));
+
+    // Public ungated AI4Bharat IndicTrans2 FP16 ONNX checkpoint from same creator (hari31416)
+    const mtFp16BaseUrl =
+        'https://huggingface.co/hari31416/indictrans2-indic-indic-dist-320M-ONNX-fp16/resolve/main';
+
+    try {
+      _emitState(const DownloadStateDownloading('AI4Bharat IndicTrans2 FP16 (Model)', 0, modelKey: 'mt_fp16'));
+
+      // 1. Download Full Precision Encoder ONNX computational graph
+      if (!await targetModel.exists() || await targetModel.length() < 1024) {
+        await _downloadFileWithRedirects('$mtFp16BaseUrl/encoder_model.onnx', targetModel, (percent) {
+          _emitState(DownloadStateDownloading('IndicTrans2 FP16 Graph', percent, modelKey: 'mt_fp16'));
+        });
+      }
+
+      // 2. Download FP16 Tensor Weights (~239 MB)
+      if (!await targetData.exists() || await targetData.length() < 50 * 1024 * 1024) {
+        await _downloadFileWithRedirects('$mtFp16BaseUrl/encoder_model.onnx.data', targetData, (percent) {
+          _emitState(DownloadStateDownloading('IndicTrans2 FP16 Weights (~239MB)', percent, modelKey: 'mt_fp16'));
+        });
+      }
+
+      // 3. Download Dictionary & Tokenizer mapping
+      if (!await targetSpm.exists() || await targetSpm.length() < 100) {
+        await _downloadFileWithRedirects('$mtFp16BaseUrl/dict.SRC.json', targetSpm, (percent) {
+          _emitState(DownloadStateDownloading('IndicTrans2 Dictionary & Tokens', percent, modelKey: 'mt_fp16'));
+        });
+      }
+
+      _emitState(const DownloadStateCompleted('AI4Bharat IndicTrans2 FP16 Ready'));
+      return true;
+    } catch (e) {
+      debugPrint('Error downloading IndicTrans2 FP16 MT: $e');
+      _emitState(DownloadStateError('IndicTrans2 FP16 MT download failed: $e'));
       return false;
     }
   }
@@ -152,14 +228,49 @@ class LanguagePackManager {
   Future<bool> deleteMt() async {
     try {
       final modelsDir = await getModelsDirectory();
-      final mtDir = Directory(p.join(modelsDir.path, 'mt'));
-      if (await mtDir.exists()) {
-        await mtDir.delete(recursive: true);
+      final targetModel = File(p.join(modelsDir.path, 'mt', 'indictrans2_int8.onnx'));
+      if (await targetModel.exists()) {
+        await targetModel.delete();
       }
-      _emitState(const DownloadStateCompleted('IndicTrans2 MT model deleted'));
+      // If FP16 also doesn't exist, purge entire mt directory
+      final fp16Model = File(p.join(modelsDir.path, 'mt', 'indictrans2_fp16.onnx'));
+      if (!await fp16Model.exists()) {
+        final mtDir = Directory(p.join(modelsDir.path, 'mt'));
+        if (await mtDir.exists()) {
+          await mtDir.delete(recursive: true);
+        }
+      }
+      _emitState(const DownloadStateCompleted('IndicTrans2 INT8 model deleted'));
       return true;
     } catch (e) {
-      debugPrint('Error deleting IndicTrans2 MT model: $e');
+      debugPrint('Error deleting IndicTrans2 INT8 MT model: $e');
+      return false;
+    }
+  }
+
+  Future<bool> deleteMtFp16() async {
+    try {
+      final modelsDir = await getModelsDirectory();
+      final targetModel = File(p.join(modelsDir.path, 'mt', 'indictrans2_fp16.onnx'));
+      final targetData = File(p.join(modelsDir.path, 'mt', 'encoder_model.onnx.data'));
+      if (await targetModel.exists()) {
+        await targetModel.delete();
+      }
+      if (await targetData.exists()) {
+        await targetData.delete();
+      }
+      // If INT8 also doesn't exist, purge entire mt directory
+      final int8Model = File(p.join(modelsDir.path, 'mt', 'indictrans2_int8.onnx'));
+      if (!await int8Model.exists()) {
+        final mtDir = Directory(p.join(modelsDir.path, 'mt'));
+        if (await mtDir.exists()) {
+          await mtDir.delete(recursive: true);
+        }
+      }
+      _emitState(const DownloadStateCompleted('IndicTrans2 FP16 model deleted'));
+      return true;
+    } catch (e) {
+      debugPrint('Error deleting IndicTrans2 FP16 MT model: $e');
       return false;
     }
   }
@@ -211,13 +322,62 @@ class LanguagePackManager {
     try {
       final modelsDir = await getModelsDirectory();
       final sttDir = Directory(p.join(modelsDir.path, 'stt'));
-      if (await sttDir.exists()) {
-        await sttDir.delete(recursive: true);
+      final int8File = File(p.join(sttDir.path, 'indic_conformer.onnx'));
+      if (await int8File.exists()) {
+        await int8File.delete();
       }
-      _emitState(const DownloadStateCompleted('STT model deleted'));
+      _emitState(const DownloadStateCompleted('IndicConformer INT8 model deleted'));
       return true;
     } catch (e) {
-      debugPrint('Error deleting STT model: $e');
+      debugPrint('Error deleting STT INT8 model: $e');
+      return false;
+    }
+  }
+
+  Future<bool> downloadSttFp32() async {
+    final modelsDir = await getModelsDirectory();
+    final sttDir = Directory(p.join(modelsDir.path, 'stt'));
+    if (!await sttDir.exists()) {
+      await sttDir.create(recursive: true);
+    }
+
+    const indicBaseUrl =
+        'https://huggingface.co/meetsync/indic-conformer-onnx-sherpa/resolve/main';
+    final files = [
+      ('model.onnx', 'indic_conformer_fp32.onnx'),
+      ('tokens.txt', 'tokens.txt'),
+    ];
+
+    try {
+      for (final (remote, local) in files) {
+        final targetFile = File(p.join(sttDir.path, local));
+        if (!await targetFile.exists() || (await targetFile.length()) == 0) {
+          _emitState(DownloadStateDownloading('IndicConformer FP32 ($local)', 0, modelKey: 'stt_fp32'));
+          await _downloadFileWithRedirects('$indicBaseUrl/$remote', targetFile, (percent) {
+            _emitState(DownloadStateDownloading('IndicConformer FP32 ($local)', percent, modelKey: 'stt_fp32'));
+          });
+        }
+      }
+      _emitState(const DownloadStateCompleted('AI4Bharat IndicConformer FP32 Ready'));
+      return true;
+    } catch (e) {
+      debugPrint('Error downloading IndicConformer FP32 STT: $e');
+      _emitState(DownloadStateError('IndicConformer FP32 download failed: $e'));
+      return false;
+    }
+  }
+
+  Future<bool> deleteSttFp32() async {
+    try {
+      final modelsDir = await getModelsDirectory();
+      final targetFile = File(p.join(modelsDir.path, 'stt', 'indic_conformer_fp32.onnx'));
+      if (await targetFile.exists()) {
+        await targetFile.delete();
+      }
+      _emitState(const DownloadStateCompleted('IndicConformer FP32 model deleted'));
+      return true;
+    } catch (e) {
+      debugPrint('Error deleting IndicConformer FP32: $e');
       return false;
     }
   }
@@ -310,6 +470,9 @@ class LanguagePackManager {
     }
   }
 
+  static const String _hindiMmsTokens =
+      "फ 0\n4 1\n1 2\n- 3\nअ 4\nइ 5\n8 6\n  7\n0 8\nछ 9\nन 10\nए 11\nऐ 12\n़ 13\nष 14\nि 15\nँ 16\nच 17\n2 18\nऑ 19\nथ 20\nभ 21\nी 22\n‍ 23\nॅ 24\n3 25\nञ 26\nै 27\nु 28\nठ 29\nं 30\nॉ 31\nउ 32\n_ 33\nई 34\nः 35\nह 36\nध 37\nल 38\nर 39\nस 40\nब 41\nख 42\nण 43\n' 44\n` 45\nव 46\nघ 47\nप 48\nग 49\nढ 50\nय 51\nे 52\n् 53\nा 54\nआ 55\nड 56\nज 57\nझ 58\nश 59\nऔ 60\nो 61\nद 62\nृ 63\nौ 64\nऊ 65\nू 66\nओ 67\nट 68\nत 69\nक 70\nम 71\n";
+
   /// Downloads Meta MMS-TTS ONNX model for any of the 10 SIH 26173 languages
   Future<bool> downloadTts(String languageCode) async {
     final langMeta = supportedLanguages.where((l) => l.code == languageCode).firstOrNull;
@@ -340,7 +503,10 @@ class LanguagePackManager {
         });
       }
 
-      if (!await targetTokens.exists() || (await targetTokens.length()) == 0) {
+      if (languageCode == 'hi') {
+        // Use verified official 72 Devanagari tokens (Meta MMS hin checkpoint vocabulary)
+        await targetTokens.writeAsString(_hindiMmsTokens);
+      } else if (!await targetTokens.exists() || (await targetTokens.length()) == 0) {
         _emitState(DownloadStateDownloading('${langMeta.englishName} Voice (Tokens)', 0, modelKey: 'tts_$languageCode'));
         await _downloadFileWithRedirects('$mmsBaseUrl/tokens.txt', targetTokens, (percent) {
           _emitState(DownloadStateDownloading('${langMeta.englishName} Voice (Tokens)', percent, modelKey: 'tts_$languageCode'));
@@ -437,6 +603,13 @@ class LanguagePackManager {
 
       await sink.flush();
       await sink.close();
+
+      if (contentLength > 0 && received < contentLength) {
+        if (await tempFile.exists()) {
+          await tempFile.delete();
+        }
+        throw HttpException('Download incomplete: received $received of $contentLength bytes');
+      }
 
       if (await destination.exists()) {
         await destination.delete();

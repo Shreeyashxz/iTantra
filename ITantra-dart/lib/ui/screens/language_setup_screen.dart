@@ -40,6 +40,12 @@ class _LanguageSetupScreenState extends State<LanguageSetupScreen> {
       await settingsCtrl.updatePttMode(_pttMode);
       transceiverCtrl.setLanguage(_primaryLang);
 
+      final currentPacks = settingsCtrl.settings.installedLanguagePacks;
+      if (!currentPacks.contains('SETUP_DONE')) {
+        final newPacks = currentPacks.isEmpty ? 'SETUP_DONE' : '$currentPacks,SETUP_DONE';
+        await settingsCtrl.updateInstalledPacks(newPacks);
+      }
+
       if (_downloadOnFinish) {
         // Kick off background model download if not already cached
         if (!settingsCtrl.isSttReady) {

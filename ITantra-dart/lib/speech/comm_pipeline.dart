@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import '../network/transceiver_manager.dart';
 import '../proto/transceiver_packet.dart';
 import 'audio_recorder_service.dart';
+import 'script_normalization_engine.dart';
 import 'sherpa_onnx_speech_engine.dart';
 import 'vad_engine.dart';
 
@@ -81,11 +82,12 @@ class CommPipeline {
     _sttSubscription?.cancel();
     _sttSubscription = textStream.listen((text) async {
       if (text.trim().isNotEmpty) {
-        _onTranscriptCallback?.call(text);
+        final normalizedText = ScriptNormalizationEngine.normalizeFromStt(text, languageCode);
+        _onTranscriptCallback?.call(normalizedText);
         final packet = TransceiverPacket(
           senderId: senderId,
           languageCode: languageCode,
-          transcript: text,
+          transcript: normalizedText,
           timestampMs: DateTime.now().millisecondsSinceEpoch,
           type: PacketType.voice,
         );
@@ -101,10 +103,11 @@ class CommPipeline {
     required String text,
   }) async {
     if (text.trim().isEmpty) return;
+    final normalizedText = ScriptNormalizationEngine.normalizeFromStt(text, languageCode);
     final packet = TransceiverPacket(
       senderId: senderId,
       languageCode: languageCode,
-      transcript: text,
+      transcript: normalizedText,
       timestampMs: DateTime.now().millisecondsSinceEpoch,
       type: PacketType.voice,
     );
@@ -126,11 +129,12 @@ class CommPipeline {
     // Transcribe final buffer using IndicConformer
     final transcript = await speechEngine.stopListeningAndTranscribe();
     if (transcript.isNotEmpty && _currentSenderId != null && _currentLanguageCode != null) {
-      _onTranscriptCallback?.call(transcript);
+      final normalized = ScriptNormalizationEngine.normalizeFromStt(transcript, _currentLanguageCode!);
+      _onTranscriptCallback?.call(normalized);
       final packet = TransceiverPacket(
         senderId: _currentSenderId!,
         languageCode: _currentLanguageCode!,
-        transcript: transcript,
+        transcript: normalized,
         timestampMs: DateTime.now().millisecondsSinceEpoch,
         type: PacketType.voice,
       );
@@ -189,11 +193,12 @@ class CommPipeline {
 
             final transcript = await speechEngine.stopListeningAndTranscribe();
             if (transcript.trim().isNotEmpty && _currentSenderId != null && _currentLanguageCode != null) {
-              _onTranscriptCallback?.call(transcript);
+              final normalized = ScriptNormalizationEngine.normalizeFromStt(transcript, _currentLanguageCode!);
+              _onTranscriptCallback?.call(normalized);
               final packet = TransceiverPacket(
                 senderId: _currentSenderId!,
                 languageCode: _currentLanguageCode!,
-                transcript: transcript,
+                transcript: normalized,
                 timestampMs: DateTime.now().millisecondsSinceEpoch,
                 type: PacketType.voice,
               );

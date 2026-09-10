@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:ffi';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
@@ -67,6 +68,16 @@ class SileroVadEngine implements VadEngine {
       }
 
       if (await modelFile.exists()) {
+        if (Platform.isWindows) {
+          try {
+            final exeDir = File(Platform.resolvedExecutable).parent.path;
+            final ortPath = p.join(exeDir, 'onnxruntime.dll');
+            if (File(ortPath).existsSync()) {
+              DynamicLibrary.open(ortPath);
+            }
+          } catch (_) {}
+        }
+
         final config = sherpa.VadModelConfig(
           sileroVad: sherpa.SileroVadModelConfig(
             model: modelFile.path,
@@ -176,6 +187,23 @@ class SileroVadEngine implements VadEngine {
     }
 
     return _isSpeechActive;
+  }
+
+  /// Explicitly re-initializes neural Silero VAD into memory
+  Future<bool> initNeuralVad() async {
+    if (_sherpaVad != null && _isNeuralInitialized) return true;
+    await _initNeuralVad();
+    return isNeuralActive;
+  }
+
+  /// Offloads neural Silero VAD from RAM to reclaim memory
+  void unloadNeuralVad() {
+    try {
+      _sherpaVad?.free();
+      _sherpaVad = null;
+    } catch (_) {}
+    _isNeuralInitialized = false;
+    debugPrint('[SileroVAD] Neural VAD model offloaded from RAM (using adaptive RMS fallback)');
   }
 
   @override

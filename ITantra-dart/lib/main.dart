@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:path/path.dart' as p;
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -67,6 +68,15 @@ void main() async {
   try {
     if (!kIsWeb && Platform.isWindows) {
       final exeDir = File(Platform.resolvedExecutable).parent.path;
+      final ortPath = p.join(exeDir, 'onnxruntime.dll');
+      if (File(ortPath).existsSync()) {
+        try {
+          DynamicLibrary.open(ortPath);
+          debugPrint('[Init] Bundled onnxruntime.dll pre-loaded successfully: $ortPath');
+        } catch (e) {
+          debugPrint('[Init] Notice pre-loading onnxruntime.dll: $e');
+        }
+      }
       sherpa.initBindings(exeDir);
     } else if (!kIsWeb) {
       if (Platform.isAndroid) {
@@ -93,6 +103,7 @@ void main() async {
   final alertReceiver = AlertReceiver(
     transceiverManager: transceiverManager,
     speechEngine: speechEngine,
+    database: database,
   );
   final commPipeline = CommPipeline(
     audioRecorder: audioRecorder,
@@ -119,6 +130,7 @@ void main() async {
           create: (_) => SettingsController(
             database: database,
             languagePackManager: languagePackManager,
+            speechEngine: speechEngine,
           ),
         ),
         ChangeNotifierProvider(

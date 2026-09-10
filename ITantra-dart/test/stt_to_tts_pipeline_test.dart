@@ -1,9 +1,20 @@
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:itantra_dart/speech/language_pack_manager.dart';
+import 'package:itantra_dart/speech/script_normalization_engine.dart';
 import 'package:itantra_dart/speech/sherpa_onnx_speech_engine.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  setUpAll(() {
+    const channel = MethodChannel('xyz.luan/audioplayers.global');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (MethodCall methodCall) async => 1);
+    const audioChannel = MethodChannel('xyz.luan/audioplayers');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(audioChannel, (MethodCall methodCall) async => 1);
+  });
 
   group('STT to TTS End-to-End Pipeline & Transliterator Tests', () {
     test('IndicScriptTransliterator maps emergency keywords to English', () {
@@ -47,6 +58,29 @@ void main() {
 
       engine.unloadTts();
       expect(engine.isTtsLoaded, isFalse);
+    });
+
+    test('TTS Normalizer strips trailing punctuation across languages', () {
+      final input1 = 'नमस्ते दोस्तों।';
+      final res1 = ScriptNormalizationEngine.prepareTextForTts(input1, 'hi', 'AI4BHARAT_RASA');
+      expect(res1.endsWith('।'), isFalse);
+      expect(res1.endsWith('.'), isFalse);
+
+      final input2 = 'Emergency alert message!!!';
+      final res2 = ScriptNormalizationEngine.prepareTextForTts(input2, 'en', 'AI4BHARAT_RASA');
+      expect(res2.endsWith('!'), isFalse);
+    });
+
+    test('TTS Normalizer sanitizes Gujarati digits and symbols for Meta MMS', () {
+      final input = 'ઇમરજન્સી 108 ચેતવણી!';
+      final res = ScriptNormalizationEngine.prepareTextForTts(input, 'gu', 'META_MMS');
+      expect(res, contains('એક'));
+      expect(res, contains('શૂન્ય'));
+      expect(res, contains('આઠ'));
+      expect(res.contains('1'), isFalse);
+      expect(res.contains('0'), isFalse);
+      expect(res.contains('8'), isFalse);
+      expect(res.contains('!'), isFalse);
     });
   });
 }

@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'script_normalization_engine.dart';
 
 /// Neural and disaster-resilient Machine Translation (MT) engine
 /// based on AI4Bharat IndicTrans principles.
@@ -24,10 +25,15 @@ class IndicTransEngine {
 
   bool _isLoaded = true;
   bool get isLoaded => _isLoaded;
+  String _loadedPrecision = 'INT8';
+  String get loadedPrecision => _loadedPrecision;
 
-  void load() {
+  void load([String? precision]) {
     _isLoaded = true;
-    debugPrint('[IndicTrans] Translation model loaded into RAM');
+    if (precision != null) {
+      _loadedPrecision = precision;
+    }
+    debugPrint('[IndicTrans] Translation model loaded into RAM ($_loadedPrecision)');
   }
 
   void unload() {
@@ -40,7 +46,9 @@ class IndicTransEngine {
       return 'IndicTrans2 MT (Offloaded / 0 MB RAM)';
     }
     return _isQuantizedModelReady
-        ? 'IndicTrans2 INT8 (On-Device Quantized)'
+        ? (_loadedPrecision == 'FP16'
+            ? 'IndicTrans2 FP16 Studio (On-Device Model)'
+            : 'IndicTrans2 INT8 (On-Device Quantized)')
         : 'IndicTrans2 Hybrid (Active / Disaster Lexicon)';
   }
 
@@ -295,16 +303,50 @@ class IndicTransEngine {
   String get quantizedModelPath => _quantizedModelPath;
 
 
-  /// Inspects on-device model storage for AI4Bharat IndicTrans2 INT8 model
-  Future<bool> checkQuantizedModel(String baseDirPath) async {
-    final modelFile = File('$baseDirPath/models/mt/indictrans2_int8.onnx');
+  /// Inspects on-device model storage for AI4Bharat IndicTrans2 model (INT8 or FP16)
+  Future<bool> checkQuantizedModel(String baseDirPath, [String? preferredPrecision]) async {
     final spmFile = File('$baseDirPath/models/mt/spm.model');
-    if (await modelFile.exists() && await spmFile.exists()) {
-      _isQuantizedModelReady = true;
-      _quantizedModelPath = modelFile.path;
-      debugPrint('[IndicTrans2] Quantized on-device INT8 weights loaded from: $_quantizedModelPath');
-      return true;
+    final fp16Model = File('$baseDirPath/models/mt/indictrans2_fp16.onnx');
+    final int8Model = File('$baseDirPath/models/mt/indictrans2_int8.onnx');
+
+    if (!await spmFile.exists()) {
+      _isQuantizedModelReady = false;
+      _quantizedModelPath = '';
+      return false;
     }
+
+    if (preferredPrecision == 'FP16') {
+      if (await fp16Model.exists()) {
+        _isQuantizedModelReady = true;
+        _quantizedModelPath = fp16Model.path;
+        _loadedPrecision = 'FP16';
+        debugPrint('[IndicTrans2] On-device FP16 Studio weights loaded from: $_quantizedModelPath');
+        return true;
+      }
+      if (await int8Model.exists()) {
+        _isQuantizedModelReady = true;
+        _quantizedModelPath = int8Model.path;
+        _loadedPrecision = 'INT8';
+        debugPrint('[IndicTrans2] Fallback on-device INT8 weights loaded from: $_quantizedModelPath');
+        return true;
+      }
+    } else {
+      if (await int8Model.exists()) {
+        _isQuantizedModelReady = true;
+        _quantizedModelPath = int8Model.path;
+        _loadedPrecision = 'INT8';
+        debugPrint('[IndicTrans2] Quantized on-device INT8 weights loaded from: $_quantizedModelPath');
+        return true;
+      }
+      if (await fp16Model.exists()) {
+        _isQuantizedModelReady = true;
+        _quantizedModelPath = fp16Model.path;
+        _loadedPrecision = 'FP16';
+        debugPrint('[IndicTrans2] On-device FP16 weights loaded from: $_quantizedModelPath');
+        return true;
+      }
+    }
+
     _isQuantizedModelReady = false;
     _quantizedModelPath = '';
     return false;
@@ -334,27 +376,31 @@ class IndicTransEngine {
       return cleanText;
     }
 
-    // 1. Identity Check
-    if (src == tgt) return cleanText;
+    // 1. Script Pre-normalization for MT Input
+    final normalizedInput = ScriptNormalizationEngine.prepareTextForMt(cleanText, src);
 
-    // 2. Direct Concept / Phrase Match (Exact or Substring)
-    final matchedConcept = _findMatchingConcept(cleanText, src);
+    // 2. Identity Check
+    if (src == tgt) return normalizedInput;
+
+    // 3. Direct Concept / Phrase Match (Exact or Substring)
+    final matchedConcept = _findMatchingConcept(normalizedInput, src);
     if (matchedConcept != null) {
       final translated = conceptLexicon[matchedConcept]?[tgt];
       if (translated != null && translated.isNotEmpty) {
         debugPrint('[IndicTrans] Concept match: $matchedConcept -> $translated ($tgt)');
-        return translated;
+        return ScriptNormalizationEngine.normalizeFromMt(translated, tgt);
       }
     }
 
-    // 3. Token-by-Token Rule Translation (On-device offline concept & vocabulary mapping)
-    final tokenResult = _translateTokens(cleanText, src, tgt);
-    if (tokenResult != cleanText) {
-      debugPrint('[IndicTrans] On-device vocabulary translation: "$cleanText" -> "$tokenResult"');
-      return tokenResult;
+    // 4. Token-by-Token Rule Translation (On-device offline concept & vocabulary mapping)
+    final tokenResult = _translateTokens(normalizedInput, src, tgt);
+    if (tokenResult != normalizedInput) {
+      debugPrint('[IndicTrans] On-device vocabulary translation: "$normalizedInput" -> "$tokenResult"');
+      return ScriptNormalizationEngine.normalizeFromMt(tokenResult, tgt);
     }
 
-    return cleanText;
+    // 5. Final fallback with cross-script normalization
+    return ScriptNormalizationEngine.normalizeFromMt(normalizedInput, tgt);
   }
 
   /// Finds matching disaster or tactical concept across languages

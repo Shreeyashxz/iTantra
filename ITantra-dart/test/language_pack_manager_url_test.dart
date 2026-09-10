@@ -34,15 +34,19 @@ void main() {
       }
     });
 
-    test('MT IndicTrans2 ONNX public endpoints are reachable and valid', () async {
+    test('MT IndicTrans2 INT8 and FP16 ONNX public endpoints are reachable and valid', () async {
       final client = HttpClient();
       try {
-        final req = await client.getUrl(
-          Uri.parse('https://huggingface.co/hari31416/indictrans2-indic-indic-dist-320M-ONNX-int8/resolve/main/encoder_model.onnx'),
-        );
-        req.headers.set(HttpHeaders.userAgentHeader, 'Mozilla/5.0 (Mobile; Android)');
-        final res = await req.close();
-        expect(res.statusCode == 200 || res.statusCode == 307 || res.statusCode == 302, isTrue);
+        final endpoints = [
+          'https://huggingface.co/hari31416/indictrans2-indic-indic-dist-320M-ONNX-int8/resolve/main/encoder_model.onnx',
+          'https://huggingface.co/hari31416/indictrans2-indic-indic-dist-320M-ONNX-fp16/resolve/main/encoder_model.onnx',
+        ];
+        for (final url in endpoints) {
+          final req = await client.getUrl(Uri.parse(url));
+          req.headers.set(HttpHeaders.userAgentHeader, 'Mozilla/5.0 (Mobile; Android)');
+          final res = await req.close();
+          expect(res.statusCode == 200 || res.statusCode == 307 || res.statusCode == 302, isTrue);
+        }
       } finally {
         client.close(force: true);
       }

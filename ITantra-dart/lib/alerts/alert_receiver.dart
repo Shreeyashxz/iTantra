@@ -3,8 +3,10 @@ import 'dart:io';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import '../data/app_database.dart';
 import '../network/transceiver_manager.dart';
 import '../proto/transceiver_packet.dart';
+import '../speech/script_normalization_engine.dart';
 import '../speech/sherpa_onnx_speech_engine.dart';
 
 class AlertEvent {
@@ -26,6 +28,7 @@ class AlertReceiver {
 
   final TransceiverManager transceiverManager;
   final SherpaOnnxSpeechEngine speechEngine;
+  final AppDatabase? database;
 
   final _activeAlertController = StreamController<AlertEvent?>.broadcast();
   Stream<AlertEvent?> get activeAlert => _activeAlertController.stream;
@@ -37,6 +40,7 @@ class AlertReceiver {
   AlertReceiver({
     required this.transceiverManager,
     required this.speechEngine,
+    this.database,
   }) {
     _startListening();
   }
@@ -101,7 +105,20 @@ class AlertReceiver {
 
     // 3. Synthesize distress text at maximum alarm stream volume
     try {
-      await speechEngine.synthesizeSpeech(packet.transcript, packet.languageCode);
+      final settings = await database?.getSettings();
+      final engineType = settings?.ttsEngineType ?? 'AI4BHARAT_RASA';
+      final gender = settings?.ttsGender ?? 'FEMALE';
+      final normalizedText = ScriptNormalizationEngine.prepareTextForTts(
+        packet.transcript,
+        packet.languageCode,
+        engineType,
+      );
+      await speechEngine.synthesizeSpeech(
+        normalizedText,
+        packet.languageCode,
+        gender,
+        engineType,
+      );
     } catch (e) {
       debugPrint('[AlertReceiver] Error synthesizing alert speech: $e');
     }

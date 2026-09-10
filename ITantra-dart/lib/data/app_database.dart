@@ -34,7 +34,7 @@ class AppDatabase {
 
     return await openDatabase(
       path,
-      version: 6,
+      version: 8,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -49,6 +49,7 @@ class AppDatabase {
   }
 
   Future<void> _createDB(Database db, int version) async {
+    // 1. Messages Table
     await db.execute('''
       CREATE TABLE messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,6 +72,7 @@ class AppDatabase {
       )
     ''');
 
+    // 2. User Settings Table
     await db.execute('''
       CREATE TABLE user_settings (
         id INTEGER PRIMARY KEY,
@@ -83,7 +85,9 @@ class AppDatabase {
         installedLanguagePacks TEXT NOT NULL DEFAULT 'hi,en',
         alertVolumeMax INTEGER NOT NULL DEFAULT 1,
         autoPlayAudio INTEGER NOT NULL DEFAULT 1,
-        isMtEnabled INTEGER NOT NULL DEFAULT 1
+        isMtEnabled INTEGER NOT NULL DEFAULT 1,
+        sttPrecision TEXT NOT NULL DEFAULT 'INT8',
+        mtPrecision TEXT NOT NULL DEFAULT 'INT8'
       )
     ''');
 
@@ -110,6 +114,16 @@ class AppDatabase {
     if (oldVersion < 6) {
       try {
         await db.execute("ALTER TABLE user_settings ADD COLUMN isMtEnabled INTEGER NOT NULL DEFAULT 1");
+      } catch (_) {}
+    }
+    if (oldVersion < 7) {
+      try {
+        await db.execute("ALTER TABLE user_settings ADD COLUMN sttPrecision TEXT NOT NULL DEFAULT 'INT8'");
+      } catch (_) {}
+    }
+    if (oldVersion < 8) {
+      try {
+        await db.execute("ALTER TABLE user_settings ADD COLUMN mtPrecision TEXT NOT NULL DEFAULT 'INT8'");
       } catch (_) {}
     }
   }

@@ -10,6 +10,8 @@ class UserSettingsEntity {
   final bool alertVolumeMax;
   final bool autoPlayAudio;
   final bool isMtEnabled;
+  final String sttPrecision; // 'INT8' or 'FP32'
+  final String mtPrecision; // 'INT8' or 'FP16'
 
   UserSettingsEntity({
     this.id = 1,
@@ -23,6 +25,8 @@ class UserSettingsEntity {
     this.alertVolumeMax = true,
     this.autoPlayAudio = true,
     this.isMtEnabled = true,
+    this.sttPrecision = 'INT8',
+    this.mtPrecision = 'INT8',
   });
 
   Map<String, dynamic> toMap() => {
@@ -37,6 +41,8 @@ class UserSettingsEntity {
     'alertVolumeMax': alertVolumeMax ? 1 : 0,
     'autoPlayAudio': autoPlayAudio ? 1 : 0,
     'isMtEnabled': isMtEnabled ? 1 : 0,
+    'sttPrecision': sttPrecision,
+    'mtPrecision': mtPrecision,
   };
 
   factory UserSettingsEntity.fromMap(Map<String, dynamic> map) => UserSettingsEntity(
@@ -51,6 +57,8 @@ class UserSettingsEntity {
     alertVolumeMax: (map['alertVolumeMax'] as int? ?? 1) == 1,
     autoPlayAudio: (map['autoPlayAudio'] as int? ?? 1) == 1,
     isMtEnabled: (map['isMtEnabled'] as int? ?? 1) == 1,
+    sttPrecision: map['sttPrecision'] as String? ?? 'INT8',
+    mtPrecision: map['mtPrecision'] as String? ?? 'INT8',
   );
 
   UserSettingsEntity copyWith({
@@ -65,6 +73,8 @@ class UserSettingsEntity {
     bool? alertVolumeMax,
     bool? autoPlayAudio,
     bool? isMtEnabled,
+    String? sttPrecision,
+    String? mtPrecision,
   }) => UserSettingsEntity(
     id: id ?? this.id,
     preferredLanguage: preferredLanguage ?? this.preferredLanguage,
@@ -77,5 +87,7 @@ class UserSettingsEntity {
     alertVolumeMax: alertVolumeMax ?? this.alertVolumeMax,
     autoPlayAudio: autoPlayAudio ?? this.autoPlayAudio,
     isMtEnabled: isMtEnabled ?? this.isMtEnabled,
+    sttPrecision: sttPrecision ?? this.sttPrecision,
+    mtPrecision: mtPrecision ?? this.mtPrecision,
   );
 }

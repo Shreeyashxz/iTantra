@@ -52,7 +52,9 @@ void main() {
               installedLanguagePacks TEXT NOT NULL DEFAULT 'hi,en',
               alertVolumeMax INTEGER NOT NULL DEFAULT 1,
               autoPlayAudio INTEGER NOT NULL DEFAULT 1,
-              isMtEnabled INTEGER NOT NULL DEFAULT 1
+              isMtEnabled INTEGER NOT NULL DEFAULT 1,
+              sttPrecision TEXT NOT NULL DEFAULT 'INT8',
+              mtPrecision TEXT NOT NULL DEFAULT 'INT8'
             )
           ''');
         },
@@ -105,6 +107,7 @@ void main() {
         preferredLanguage: 'ta',
         ttsSpeed: 1.2,
         pttMode: 'HOLD',
+        mtPrecision: 'FP16',
       );
 
       await db.insert('user_settings', settings.toMap());
@@ -115,6 +118,8 @@ void main() {
       expect(retrieved.preferredLanguage, equals('ta'));
       expect(retrieved.ttsSpeed, equals(1.2));
       expect(retrieved.isMtEnabled, isTrue);
+      expect(retrieved.sttPrecision, equals('INT8'));
+      expect(retrieved.mtPrecision, equals('FP16'));
     });
   });
 }

@@ -1177,10 +1177,10 @@ class _DevDiagnosticsScreenState extends State<DevDiagnosticsScreen>
                           avatar: const Icon(Icons.hub_rounded, size: 14),
                           label: const Text('AI4Bharat Rasa-13', style: TextStyle(fontSize: 11)),
                           selected: settingsController.ttsEngineType == 'AI4BHARAT_RASA',
-                          onSelected: (selected) {
+                          onSelected: (selected) async {
                             if (selected) {
-                              settingsController.updateTtsEngineType('AI4BHARAT_RASA');
-                              setState(() {});
+                              await settingsController.updateTtsEngineType('AI4BHARAT_RASA');
+                              if (mounted) setState(() {});
                             }
                           },
                         ),
@@ -1189,10 +1189,10 @@ class _DevDiagnosticsScreenState extends State<DevDiagnosticsScreen>
                           avatar: const Icon(Icons.language_rounded, size: 14),
                           label: const Text('Meta MMS', style: TextStyle(fontSize: 11)),
                           selected: settingsController.ttsEngineType == 'META_MMS',
-                          onSelected: (selected) {
+                          onSelected: (selected) async {
                             if (selected) {
-                              settingsController.updateTtsEngineType('META_MMS');
-                              setState(() {});
+                              await settingsController.updateTtsEngineType('META_MMS');
+                              if (mounted) setState(() {});
                             }
                           },
                         ),
@@ -1206,6 +1206,7 @@ class _DevDiagnosticsScreenState extends State<DevDiagnosticsScreen>
                         Expanded(
                           flex: 3,
                           child: DropdownButtonFormField<String>(
+                            key: ValueKey('diag_tts_$_selectedTtsLang'),
                             initialValue: _selectedTtsLang,
                             isDense: true,
                             decoration: const InputDecoration(

@@ -10,6 +10,7 @@ import '../network/wifi_mesh_manager.dart';
 import '../proto/transceiver_packet.dart';
 import '../speech/comm_pipeline.dart';
 import '../speech/indic_trans_engine.dart';
+import '../speech/script_normalization_engine.dart';
 import '../speech/sherpa_onnx_speech_engine.dart';
 
 class TransceiverController extends ChangeNotifier {
@@ -118,6 +119,12 @@ class TransceiverController extends ChangeNotifier {
             // MT is bypassed or languages match — zero translation overhead!
             await ttsWarmUp;
           }
+
+          textToSpeak = ScriptNormalizationEngine.prepareTextForTts(
+            textToSpeak,
+            _selectedLanguage,
+            settings.ttsEngineType,
+          );
 
           await speechEngine.synthesizeSpeech(
             textToSpeak,

@@ -64,25 +64,163 @@ class SettingsScreen extends StatelessWidget {
                     ),
                     const SizedBox(height: 14),
 
-                    // STT Status
+                    // STT Engine Configuration & Precision Switch
+                    Text(
+                      'STT Model Precision (एकरूपता व परिशुद्धता)',
+                      style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 6),
+                    SizedBox(
+                      width: double.infinity,
+                      child: SegmentedButton<String>(
+                        segments: [
+                          ButtonSegment(
+                            value: 'INT8',
+                            icon: const Icon(Icons.speed_rounded),
+                            label: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Text('INT8 (Fast)'),
+                                if (settingsController.isSttReady)
+                                  const Padding(
+                                    padding: EdgeInsets.only(left: 4),
+                                    child: Icon(Icons.check_circle_rounded, size: 14, color: Colors.greenAccent),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          ButtonSegment(
+                            value: 'FP32',
+                            icon: const Icon(Icons.high_quality_rounded),
+                            label: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Text('FP32 (Accurate)'),
+                                if (settingsController.isSttFp32Ready)
+                                  const Padding(
+                                    padding: EdgeInsets.only(left: 4),
+                                    child: Icon(Icons.check_circle_rounded, size: 14, color: Colors.greenAccent),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ],
+                        selected: {settings.sttPrecision},
+                        onSelectionChanged: (set) {
+                          if (set.isNotEmpty) {
+                            settingsController.updateSttPrecision(set.first);
+                          }
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      settings.sttPrecision == 'INT8'
+                          ? '⚡ INT8 Quantized: ~120MB download, ultra-low CPU/RAM usage (~150ms latency).'
+                          : '🎯 FP32 Full Precision: ~493MB download, maximum acoustic fidelity and noise robustness.',
+                      style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                    ),
+                    const SizedBox(height: 10),
+
+                    // STT INT8 Status Row
                     _ModelStatusRow(
-                      title: 'STT Engine (AI4Bharat IndicConformer INT8)',
+                      title: 'IndicConformer INT8 Quantized (~120 MB)',
                       modelKey: 'stt',
                       isReady: settingsController.isSttReady,
                       downloadState: settingsController.downloadState,
                       onDownload: () => settingsController.downloadStt(),
                       onDelete: () => settingsController.deleteStt(),
                     ),
+                    const SizedBox(height: 6),
+
+                    // STT FP32 Status Row
+                    _ModelStatusRow(
+                      title: 'IndicConformer FP32 Full Precision (~493 MB)',
+                      modelKey: 'stt_fp32',
+                      isReady: settingsController.isSttFp32Ready,
+                      downloadState: settingsController.downloadState,
+                      onDownload: () => settingsController.downloadSttFp32(),
+                      onDelete: () => settingsController.deleteSttFp32(),
+                    ),
                     const Divider(height: 16),
 
-                    // MT Status
+                    // MT Model Precision Selection
+                    Text(
+                      'Machine Translation Precision (IndicTrans2)',
+                      style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 6),
+                    SizedBox(
+                      width: double.infinity,
+                      child: SegmentedButton<String>(
+                        segments: [
+                          ButtonSegment(
+                            value: 'INT8',
+                            icon: const Icon(Icons.speed_rounded),
+                            label: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Text('INT8 (Fast)'),
+                                if (settingsController.isMtReady)
+                                  const Padding(
+                                    padding: EdgeInsets.only(left: 4),
+                                    child: Icon(Icons.check_circle_rounded, size: 14, color: Colors.greenAccent),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          ButtonSegment(
+                            value: 'FP16',
+                            icon: const Icon(Icons.high_quality_rounded),
+                            label: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Text('FP16 (Studio)'),
+                                if (settingsController.isMtFp16Ready)
+                                  const Padding(
+                                    padding: EdgeInsets.only(left: 4),
+                                    child: Icon(Icons.check_circle_rounded, size: 14, color: Colors.greenAccent),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ],
+                        selected: {settings.mtPrecision},
+                        onSelectionChanged: (set) {
+                          if (set.isNotEmpty) {
+                            settingsController.updateMtPrecision(set.first);
+                          }
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      settings.mtPrecision == 'INT8'
+                          ? '⚡ INT8 Quantized: ~110MB download, low RAM footprint (~110MB), ultra-fast offline translation.'
+                          : '🎯 FP16 Studio: ~220MB download, ~220MB RAM, maximum nuance and fidelity across 10 Indic languages.',
+                      style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                    ),
+                    const SizedBox(height: 10),
+
+                    // MT INT8 Status
                     _ModelStatusRow(
-                      title: 'MT Engine (AI4Bharat IndicTrans2 INT8 Quantized)',
+                      title: 'IndicTrans2 INT8 Quantized (~110 MB)',
                       modelKey: 'mt',
                       isReady: settingsController.isMtReady,
                       downloadState: settingsController.downloadState,
                       onDownload: () => settingsController.downloadMt(),
                       onDelete: () => settingsController.deleteMt(),
+                    ),
+                    const SizedBox(height: 6),
+
+                    // MT FP16 Status
+                    _ModelStatusRow(
+                      title: 'IndicTrans2 FP16 Studio (~220 MB)',
+                      modelKey: 'mt_fp16',
+                      isReady: settingsController.isMtFp16Ready,
+                      downloadState: settingsController.downloadState,
+                      onDownload: () => settingsController.downloadMtFp16(),
+                      onDelete: () => settingsController.deleteMtFp16(),
                     ),
                     const Divider(height: 16),
 
@@ -128,7 +266,9 @@ class SettingsScreen extends StatelessWidget {
 
                     // 10 Language TTS Rows — each with inline progress bar
                     ...settingsController.languages.map((lang) {
-                      final isReady = settingsController.isTtsReady(lang.code);
+                      final isReady = settings.ttsEngineType == 'META_MMS'
+                          ? settingsController.isMmsReady(lang.code)
+                          : settingsController.isTtsReady(lang.code);
                       return Padding(
                         padding: const EdgeInsets.symmetric(vertical: 4),
                         child: _ModelStatusRow(

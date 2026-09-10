@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
@@ -8,96 +9,13 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 import 'language_pack_manager.dart';
+import 'script_normalization_engine.dart';
 import 'speech_engine.dart';
 
-/// Bidirectional transliterator and language adapter for Indian & English scripts
+/// Legacy adapter for backward compatibility. Uses ScriptNormalizationEngine under the hood.
 class IndicScriptTransliterator {
-  static const Map<String, String> commonWords = {
-    'हैलो': 'Hello',
-    'हेलो': 'Hello',
-    'नमस्ते': 'Namaste',
-    'नमस्कार': 'Namaskar',
-    'मदद': 'Help',
-    'सहायता': 'Help',
-    'आपातकाल': 'Emergency',
-    'आपातकालीन': 'Emergency',
-    'खतरा': 'Danger',
-    'रेडियो': 'Radio',
-    'कंट्रोल': 'Control',
-    'सिग्नल': 'Signal',
-    'चेक': 'Check',
-    'परीक्षण': 'Test',
-    'टेस्ट': 'Test',
-    'स्थान': 'Location',
-    'सेक्टर': 'Sector',
-    'डॉक्टर': 'Doctor',
-    'अस्पताल': 'Hospital',
-    'पानी': 'Water',
-    'राशन': 'Ration',
-    'भोजन': 'Food',
-    'टीम': 'Team',
-    'यूनिट': 'Unit',
-    'संदेश': 'Message',
-    'कॉपी': 'Copy',
-    'ओवर': 'Over',
-    'आउट': 'Out',
-    'रुको': 'Stand by',
-    'हाँ': 'Yes',
-    'नहीं': 'No',
-    'एक': '1',
-    'दो': '2',
-    'तीन': '3',
-    'चार': '4',
-    'पाँच': '5',
-    'पांच': '5',
-    'छह': '6',
-    'सात': '7',
-    'आठ': '8',
-    'नौ': '9',
-    'शून्य': '0',
-    'वन': '1',
-    'टू': '2',
-    'थ्री': '3',
-    'फोर': '4',
-    'फाइव': '5',
-  };
-
-  static const Map<String, String> devanagariToLatin = {
-    'क': 'k', 'ख': 'kh', 'ग': 'g', 'घ': 'gh', 'ङ': 'ng',
-    'च': 'ch', 'छ': 'chh', 'ज': 'j', 'झ': 'jh', 'ञ': 'ny',
-    'ट': 't', 'ठ': 'th', 'ड': 'd', 'ढ': 'dh', 'ण': 'n',
-    'त': 't', 'थ': 'th', 'द': 'd', 'ध': 'dh', 'न': 'n',
-    'प': 'p', 'फ': 'ph', 'ब': 'b', 'भ': 'bh', 'म': 'm',
-    'य': 'y', 'र': 'r', 'ल': 'l', 'व': 'v', 'श': 'sh',
-    'ष': 'sh', 'स': 's', 'ह': 'h',
-    'अ': 'a', 'आ': 'aa', 'इ': 'i', 'ई': 'ee', 'उ': 'u',
-    'ऊ': 'oo', 'ऋ': 'ri', 'ए': 'e', 'ऐ': 'ai', 'ओ': 'o', 'औ': 'au',
-    'ा': 'a', 'ि': 'i', 'ी': 'ee', 'ु': 'u', 'ू': 'oo',
-    'े': 'e', 'ै': 'ai', 'ो': 'o', 'ौ': 'au', 'ं': 'n',
-    '्': '', 'ः': 'h', 'ँ': 'n', '़': '',
-  };
-
-  static String toEnglish(String input) {
-    if (input.trim().isEmpty) return input;
-    String res = input;
-
-    // 1. Map whole emergency and technical terms
-    for (final entry in commonWords.entries) {
-      res = res.replaceAll(entry.key, entry.value);
-    }
-
-    // 2. Character-by-character transliteration for any remaining Devanagari
-    final sb = StringBuffer();
-    for (int i = 0; i < res.length; i++) {
-      final char = res[i];
-      if (devanagariToLatin.containsKey(char)) {
-        sb.write(devanagariToLatin[char]);
-      } else {
-        sb.write(char);
-      }
-    }
-    return sb.toString().trim();
-  }
+  static String toEnglish(String input) =>
+      ScriptNormalizationEngine.normalizeFromStt(input, 'en');
 }
 
 /// Real on-device and hybrid speech engine.
@@ -114,6 +32,7 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
   sherpa.OnlineStream? _onlineStream;
   sherpa.OfflineRecognizer? _offlineRecognizer;
   bool _isIndicConformer = false;
+  String? _loadedSttVariant;
   final List<int> _audioBuffer = [];
 
   StreamController<String>? _sttTextController;
@@ -139,7 +58,7 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
   // ==========================================
 
   /// Initialize the STT recognizer from downloaded model files.
-  Future<bool> initStt() async {
+  Future<bool> initStt([String precision = 'INT8']) async {
     if (_offlineRecognizer != null || _onlineRecognizer != null) return true;
 
     // Prevent Windows 11 system32 DLL hijacking by pre-loading bundled onnxruntime.dll
@@ -157,17 +76,36 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
       final dir = await _modelsDir();
       final sttDir = p.join(dir, 'stt');
 
-      final indicModel = p.join(sttDir, 'indic_conformer.onnx');
+      final indicInt8 = p.join(sttDir, 'indic_conformer.onnx');
+      final indicFp32 = p.join(sttDir, 'indic_conformer_fp32.onnx');
       final encoder = p.join(sttDir, 'encoder.onnx');
       final decoder = p.join(sttDir, 'decoder.onnx');
       final joiner = p.join(sttDir, 'joiner.onnx');
       final tokens = p.join(sttDir, 'tokens.txt');
 
-      if (File(indicModel).existsSync() && File(tokens).existsSync()) {
-        debugPrint('[STT] Initializing AI4Bharat IndicConformer INT8 model (NeMo CTC)...');
+      String? chosenIndicModel;
+      if (precision.toUpperCase() == 'FP32') {
+        if (File(indicFp32).existsSync()) {
+          chosenIndicModel = indicFp32;
+        } else if (File(indicInt8).existsSync()) {
+          chosenIndicModel = indicInt8;
+          debugPrint('[STT] FP32 model missing; falling back to INT8');
+        }
+      } else {
+        if (File(indicInt8).existsSync()) {
+          chosenIndicModel = indicInt8;
+        } else if (File(indicFp32).existsSync()) {
+          chosenIndicModel = indicFp32;
+          debugPrint('[STT] INT8 model missing; falling back to FP32');
+        }
+      }
+
+      if (chosenIndicModel != null && File(tokens).existsSync()) {
+        final isFp32 = chosenIndicModel == indicFp32;
+        debugPrint('[STT] Initializing AI4Bharat IndicConformer ${isFp32 ? "FP32" : "INT8"} model (NeMo CTC)...');
         final offlineConfig = sherpa.OfflineRecognizerConfig(
           model: sherpa.OfflineModelConfig(
-            nemoCtc: sherpa.OfflineNemoEncDecCtcModelConfig(model: indicModel),
+            nemoCtc: sherpa.OfflineNemoEncDecCtcModelConfig(model: chosenIndicModel),
             tokens: tokens,
             numThreads: 2,
             debug: false,
@@ -175,7 +113,8 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
         );
         _offlineRecognizer = sherpa.OfflineRecognizer(offlineConfig);
         _isIndicConformer = true;
-        debugPrint('[STT] AI4Bharat IndicConformer OfflineRecognizer initialized successfully');
+        _loadedSttVariant = isFp32 ? 'IndicConformer FP32' : 'IndicConformer INT8';
+        debugPrint('[STT] AI4Bharat IndicConformer (${isFp32 ? "FP32" : "INT8"}) OfflineRecognizer initialized successfully');
         return true;
       } else if (File(encoder).existsSync() && File(tokens).existsSync()) {
         debugPrint('[STT] Initializing Streaming Zipformer model...');
@@ -197,6 +136,7 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
         );
         _onlineRecognizer = sherpa.OnlineRecognizer(config);
         _isIndicConformer = false;
+        _loadedSttVariant = 'Zipformer Streaming';
         debugPrint('[STT] OnlineRecognizer initialized successfully');
         return true;
       } else {
@@ -264,9 +204,7 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
         final result = _onlineRecognizer!.getResult(_onlineStream!).text.trim();
         if (result.isNotEmpty && result != _lastSttText) {
           _lastSttText = result;
-          final processed = _currentLanguage == 'en'
-              ? IndicScriptTransliterator.toEnglish(result)
-              : result;
+          final processed = ScriptNormalizationEngine.normalizeFromStt(result, _currentLanguage);
           _sttTextController?.add(processed);
         }
       } catch (_) {}
@@ -306,9 +244,7 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
         debugPrint('[STT] Raw IndicConformer output: "$rawResult"');
 
         if (rawResult.isNotEmpty) {
-          finalTranscript = lang == 'en'
-              ? IndicScriptTransliterator.toEnglish(rawResult)
-              : rawResult;
+          finalTranscript = ScriptNormalizationEngine.normalizeFromStt(rawResult, lang);
           _lastSttText = finalTranscript;
           _sttTextController?.add(finalTranscript);
         }
@@ -326,9 +262,7 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
         }
         final finalResult = _onlineRecognizer!.getResult(_onlineStream!).text.trim();
         if (finalResult.isNotEmpty) {
-          finalTranscript = lang == 'en'
-              ? IndicScriptTransliterator.toEnglish(finalResult)
-              : finalResult;
+          finalTranscript = ScriptNormalizationEngine.normalizeFromStt(finalResult, lang);
           _lastSttText = finalTranscript;
           _sttTextController?.add(finalTranscript);
         }
@@ -358,9 +292,29 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
   // ==========================================
 
   /// Initialize TTS for a given language from downloaded VITS ONNX model.
-  Future<bool> initTts(String languageCode, [String ttsEngineType = 'AI4BHARAT_RASA']) async {
-    final engineKey = '${languageCode}_$ttsEngineType';
+  Future<bool> initTts(String languageCode, [String ttsEngineType = 'META_MMS']) async {
+    // English defaults to Meta MMS across the board unless Rasa-13 is explicitly requested
+    final effectiveEngineType = (languageCode == 'en' && ttsEngineType != 'AI4BHARAT_RASA')
+        ? 'META_MMS'
+        : ttsEngineType;
+
+    // AI4Bharat Rasa-13 is universal across all 13 languages — deduplicate in RAM under a single key
+    final engineKey = effectiveEngineType == 'AI4BHARAT_RASA'
+        ? 'AI4BHARAT_RASA'
+        : 'mms_$languageCode';
+
     if (_ttsEngines.containsKey(engineKey)) return true;
+
+    // Prevent Windows 11 system32 DLL hijacking by pre-loading bundled onnxruntime.dll
+    if (Platform.isWindows) {
+      try {
+        final exeDir = File(Platform.resolvedExecutable).parent.path;
+        final ortPath = p.join(exeDir, 'onnxruntime.dll');
+        if (File(ortPath).existsSync()) {
+          DynamicLibrary.open(ortPath);
+        }
+      } catch (_) {}
+    }
 
     try {
       final dir = await _modelsDir();
@@ -376,42 +330,40 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
       final mmsDir = p.join(dir, 'tts', languageCode);
       final mmsModel = p.join(mmsDir, 'vits.onnx');
       final mmsTokens = p.join(mmsDir, 'tokens.txt');
-      final mmsLexicon = p.join(mmsDir, 'lexicon.txt');
 
       String model;
       String tokens;
-      String lexicon = '';
 
-      if (ttsEngineType == 'AI4BHARAT_RASA') {
-        if (File(rasaModel).existsSync() && File(rasaTokens).existsSync()) {
+      if (effectiveEngineType == 'AI4BHARAT_RASA') {
+        if (File(rasaModel).existsSync() &&
+            File(rasaTokens).existsSync() &&
+            File(rasaModel).lengthSync() > 10 * 1024 * 1024) {
           model = rasaModel;
           tokens = rasaTokens;
-        } else if (localRasaModel.existsSync() && localRasaTokens.existsSync()) {
+        } else if (localRasaModel.existsSync() &&
+            localRasaTokens.existsSync() &&
+            localRasaModel.lengthSync() > 10 * 1024 * 1024) {
           model = localRasaModel.path;
           tokens = localRasaTokens.path;
-        } else if (File(mmsModel).existsSync() && File(mmsTokens).existsSync()) {
+        } else if (File(mmsModel).existsSync() &&
+            File(mmsTokens).existsSync() &&
+            File(mmsModel).lengthSync() > 10 * 1024 * 1024) {
           model = mmsModel;
           tokens = mmsTokens;
-          lexicon = mmsLexicon;
         } else {
-          debugPrint('[TTS] Neither Rasa-13 nor MMS found for $languageCode');
+          debugPrint('[TTS] AI4Bharat Rasa-13 model not found on disk');
           return false;
         }
       } else {
         // META_MMS requested
-        if (File(mmsModel).existsSync() && File(mmsTokens).existsSync()) {
+        if (File(mmsModel).existsSync() &&
+            File(mmsTokens).existsSync() &&
+            File(mmsModel).lengthSync() > 10 * 1024 * 1024) {
           model = mmsModel;
           tokens = mmsTokens;
-          lexicon = mmsLexicon;
-        } else if (File(rasaModel).existsSync() && File(rasaTokens).existsSync()) {
-          model = rasaModel;
-          tokens = rasaTokens;
-        } else if (localRasaModel.existsSync() && localRasaTokens.existsSync()) {
-          model = localRasaModel.path;
-          tokens = localRasaTokens.path;
         } else {
-          debugPrint('[TTS] Meta MMS model not downloaded for $languageCode. Please download in Settings.');
-          return false;
+          debugPrint('[TTS] Meta MMS model not available or incomplete for $languageCode, falling back to Rasa-13');
+          return initTts(languageCode, 'AI4BHARAT_RASA');
         }
       }
 
@@ -419,7 +371,7 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
         model: sherpa.OfflineTtsModelConfig(
           vits: sherpa.OfflineTtsVitsModelConfig(
             model: model,
-            lexicon: File(lexicon).existsSync() ? lexicon : '',
+            lexicon: '', // Character-based models must not receive 0-byte lexicon files
             tokens: tokens,
             lengthScale: 1.0,
             noiseScale: 0.667,
@@ -444,10 +396,10 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
 
       _ttsEngines[engineKey] = sherpa.OfflineTts(config);
       _ttsEngineKeys.add(engineKey);
-      debugPrint('[TTS] Initialized $ttsEngineType for $languageCode successfully');
+      debugPrint('[TTS] Initialized $effectiveEngineType ($engineKey) for $languageCode successfully');
       return true;
     } catch (e) {
-      debugPrint('[TTS] VITS engine init error for $languageCode ($ttsEngineType): $e');
+      debugPrint('[TTS] VITS engine init error for $languageCode ($effectiveEngineType): $e');
       return false;
     }
   }
@@ -457,28 +409,38 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
     String text,
     String languageCode, [
     String gender = 'FEMALE',
-    String ttsEngineType = 'AI4BHARAT_RASA',
+    String ttsEngineType = 'META_MMS',
   ]) async {
     if (text.trim().isEmpty) return;
 
-    final isMale = gender.toUpperCase() == 'MALE';
-    final engineKey = '${languageCode}_$ttsEngineType';
+    // English defaults to Meta MMS across the board unless Rasa-13 is explicitly requested
+    final effectiveEngine = (languageCode == 'en' && ttsEngineType != 'AI4BHARAT_RASA')
+        ? 'META_MMS'
+        : ttsEngineType;
+
+    final engineKey = effectiveEngine == 'AI4BHARAT_RASA'
+        ? 'AI4BHARAT_RASA'
+        : 'mms_$languageCode';
 
     // 1. On-device neural VITS model (AI4Bharat Rasa-13 or Meta MMS)
     try {
-      final ready = await initTts(languageCode, ttsEngineType);
+      final ready = await initTts(languageCode, effectiveEngine);
       if (ready && _ttsEngines.containsKey(engineKey)) {
         final tts = _ttsEngines[engineKey]!;
-        // Meta MMS is single-speaker (sid MUST be 0, otherwise throws or produces silence)
-        // AI4Bharat Rasa-13 is multi-speaker (sid: 0 = Female, 1 = Male)
-        final isMms = ttsEngineType == 'META_MMS';
-        final speakerId = isMms ? 0 : (isMale ? 1 : 0);
-        final speed = isMale ? 0.92 : 1.02;
+        // Clean 1.0x native model synthesis (no pitch warping or male/female distortion)
+        const speakerId = 0;
+        const speed = 1.0;
 
-        final audio = tts.generate(text: text, sid: speakerId, speed: speed);
+        final normalizedText = ScriptNormalizationEngine.prepareTextForTts(
+          text,
+          languageCode,
+          effectiveEngine,
+        );
+
+        final audio = tts.generate(text: normalizedText, sid: speakerId, speed: speed);
         if (audio.samples.isNotEmpty) {
-          debugPrint('[TTS] Synthesized ${audio.samples.length} samples at ${audio.sampleRate}Hz via $ttsEngineType for $languageCode ($gender)');
-          await _playGeneratedAudio(audio.samples, audio.sampleRate, isMale);
+          debugPrint('[TTS] Synthesized ${audio.samples.length} samples at ${audio.sampleRate}Hz via $effectiveEngine for $languageCode');
+          await _playGeneratedAudio(audio.samples, audio.sampleRate);
           return;
         } else {
           debugPrint('[TTS] VITS generator returned empty samples for text: "$text"');
@@ -490,13 +452,13 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
 
     // 2. Strict Offline Fallback: If on-device neural VITS model is not ready, notify user
     debugPrint(
-      '[TTS] On-device VITS model for $languageCode ($gender) not ready or pack not downloaded. '
+      '[TTS] On-device VITS model for $languageCode ($effectiveEngine) not ready or pack not downloaded. '
       'Please ensure model pack is installed in Settings.',
     );
   }
 
   /// Writes the generated Float32 samples to a WAV file and plays it via AudioPlayer.
-  Future<void> _playGeneratedAudio(Float32List samples, int sampleRate, [bool isMale = false]) async {
+  Future<void> _playGeneratedAudio(Float32List samples, int sampleRate) async {
     final tempDir = await getApplicationSupportDirectory();
     final wavPath = p.join(tempDir.path, 'tts_output.wav');
 
@@ -505,19 +467,23 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
       int16Samples[i] = (samples[i] * 32767).clamp(-32768, 32767).toInt();
     }
 
-    // Physical formant & pitch scaling for Male vs Female voice
-    // Male: sample rate scaled down by 0.78 -> Deep resonant baritone voice
-    // Female: sample rate at 1.05 -> Clear natural soprano voice
-    final effectiveSampleRate = (sampleRate * (isMale ? 0.78 : 1.05)).round();
-    final wavData = _buildWav(int16Samples, effectiveSampleRate, 1);
+    // Apply a 25ms linear fade-out to the end of the audio buffer
+    // This smoothly drops amplitude to zero, eliminating clicks, DC offset pops, and trailing "aa" vocoder schwas
+    final fadeLength = math.min(int16Samples.length, (sampleRate * 0.025).round());
+    final fadeStart = int16Samples.length - fadeLength;
+    for (int i = fadeStart; i < int16Samples.length; i++) {
+      final factor = (int16Samples.length - 1 - i) / fadeLength;
+      int16Samples[i] = (int16Samples[i] * factor).toInt();
+    }
+
+    final wavData = _buildWav(int16Samples, sampleRate, 1);
     final wavFile = File(wavPath);
     await wavFile.writeAsBytes(wavData, flush: true);
 
     try {
       await _audioPlayer.stop();
+      await _audioPlayer.setPlaybackRate(1.0);
       await _audioPlayer.play(DeviceFileSource(wavPath));
-      await Future.delayed(const Duration(milliseconds: 60));
-      await _audioPlayer.setPlaybackRate(isMale ? 0.85 : 1.05);
     } catch (e) {
       debugPrint('[TTS] AudioPlayer error: $e');
     }
@@ -589,6 +555,9 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
   bool get isSttLoaded => _offlineRecognizer != null || _onlineRecognizer != null;
 
   @override
+  String? get loadedSttVariant => _loadedSttVariant;
+
+  @override
   void unloadStt() {
     _dynamicDecodeTimer?.cancel();
     _dynamicDecodeTimer = null;
@@ -605,12 +574,33 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
     } catch (_) {}
     _offlineRecognizer = null;
     _isIndicConformer = false;
+    _loadedSttVariant = null;
     _audioBuffer.clear();
     debugPrint('[STT] Recognizer models successfully offloaded from RAM');
   }
 
   @override
   bool get isTtsLoaded => _ttsEngines.isNotEmpty;
+
+  @override
+  List<String> get loadedTtsKeys => List.unmodifiable(_ttsEngines.keys);
+
+  @override
+  bool isTtsKeyLoaded(String key) => _ttsEngines.containsKey(key);
+
+  @override
+  void unloadTtsKey(String key) {
+    if (_ttsEngines.containsKey(key)) {
+      final tts = _ttsEngines.remove(key);
+      _ttsEngineKeys.remove(key);
+      try {
+        tts?.free();
+        debugPrint('[TTS] Specific model $key offloaded from RAM');
+      } catch (e) {
+        debugPrint('[TTS] Error freeing model $key: $e');
+      }
+    }
+  }
 
   @override
   void unloadTts() {
