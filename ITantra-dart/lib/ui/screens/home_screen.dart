@@ -3,6 +3,7 @@ import '../theme/app_theme.dart';
 import 'alert_screen.dart';
 import 'dev_diagnostics_screen.dart';
 import 'history_screen.dart';
+import 'model_test_lab_screen.dart';
 import 'peer_discovery_screen.dart';
 import 'settings_screen.dart';
 import 'transceiver_screen.dart';
@@ -127,6 +128,19 @@ class HomeScreen extends StatelessWidget {
 
             _ActionTile(
               index: 5,
+              title: 'Expert Model Test Lab',
+              subtitle: 'Comprehensive testing for all 7 model pipelines (STT, MT, TTS)',
+              icon: Icons.science_rounded,
+              heroTag: 'hero_model_test_lab',
+              color: const Color(0xFF00E5FF),
+              onTap: () => Navigator.of(context).push(
+                AppTheme.pageTransition(const ModelTestLabScreen()),
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            _ActionTile(
+              index: 6,
               title: 'Neural Speech & Dev Diagnostics',
               subtitle: 'Test live STT (record & text formation) and TTS (text-to-audio)',
               icon: Icons.developer_mode_rounded,

@@ -1,0 +1,10 @@
+Transceiver server active on 0.0.0.0:8888
+[SileroVAD] Neural ONNX model loaded successfully (C:\Users\SHREEYASH\AppData\Roaming\com.itantra\itantra_dart\models\silero_vad.onnx)
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
