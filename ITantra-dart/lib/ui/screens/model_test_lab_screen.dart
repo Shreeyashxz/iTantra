@@ -831,11 +831,11 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Expert Model Test Lab',
+              'Neural Speech & Dev Diagnostics',
               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
             ),
             Text(
-              '7 Unique Pipelines • STT, MT, TTS Validation',
+              '7 Unique Pipelines • Expert Model Diagnostics Lab',
               style: TextStyle(
                 fontSize: 11,
                 color: theme.colorScheme.onSurface.withAlpha(160),
