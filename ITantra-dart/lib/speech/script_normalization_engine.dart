@@ -1,9 +1,11 @@
 import 'package:flutter/foundation.dart';
+import 'indic_xlit_engine.dart';
 import 'phonological_transliteration_matrix.dart';
 
 enum NormalizerMode {
   advanced,
   legacyRuleBased,
+  neuralIndicXlit,
 }
 
 enum ScriptType {
@@ -297,7 +299,7 @@ class ScriptNormalizationEngine {
   }
 
   /// Converts any Indic script character to its canonical Devanagari counterpart.
-  /// Uses PhonologicalTransliterationMatrix in Advanced mode, or legacy ISCII block shift in Legacy mode.
+  /// Uses IndicXlitEngine in Neural mode, PhonologicalTransliterationMatrix in Advanced mode, or legacy ISCII block shift in Legacy mode.
   static String toDevanagari(String text) {
     if (text.trim().isEmpty) return text;
     if (activeMode == NormalizerMode.legacyRuleBased) {
@@ -306,6 +308,9 @@ class ScriptNormalizationEngine {
     final script = detectScript(text);
     if (script == ScriptType.devanagari || script == ScriptType.latin || script == ScriptType.unknown) {
       return text;
+    }
+    if (activeMode == NormalizerMode.neuralIndicXlit) {
+      return IndicXlitEngine.instance.toDevanagari(text, script);
     }
     return PhonologicalTransliterationMatrix.toDevanagariPhonological(text, script);
   }
@@ -353,12 +358,15 @@ class ScriptNormalizationEngine {
   }
 
   /// Converts Devanagari text to a specific target Indic script.
-  /// Uses PhonologicalTransliterationMatrix with authentic consonant collapsing in Advanced mode,
+  /// Uses IndicXlit in Neural mode, PhonologicalTransliterationMatrix in Advanced mode,
   /// or legacy block shift in Legacy mode.
   static String fromDevanagariToIndic(String text, ScriptType targetScript) {
     if (text.trim().isEmpty) return text;
     if (activeMode == NormalizerMode.legacyRuleBased) {
       return _legacyFromDevanagariToIndic(text, targetScript);
+    }
+    if (activeMode == NormalizerMode.neuralIndicXlit) {
+      return IndicXlitEngine.instance.fromDevanagari(text, targetScript);
     }
     return PhonologicalTransliterationMatrix.fromDevanagariPhonological(text, targetScript);
   }
@@ -398,6 +406,9 @@ class ScriptNormalizationEngine {
     }
 
     final script = detectScript(text);
+    if (activeMode == NormalizerMode.neuralIndicXlit) {
+      return IndicXlitEngine.instance.toLatin(text, script).trim().replaceAll(RegExp(r'\s+'), ' ');
+    }
     return PhonologicalTransliterationMatrix.toLatinPhonological(text, script).trim().replaceAll(RegExp(r'\s+'), ' ');
   }
 

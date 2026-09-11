@@ -32,6 +32,9 @@ class SettingsController extends ChangeNotifier {
   bool _isRasa13Ready = false;
   bool get isRasa13Ready => _isRasa13Ready;
 
+  bool _isIndicXlitReady = false;
+  bool get isIndicXlitReady => _isIndicXlitReady;
+
   final Map<String, bool> _ttsReadyMap = {};
   bool isTtsReady(String lang) => _ttsReadyMap[lang] ?? false;
   bool get isEnTtsReady => isTtsReady('en');
@@ -53,6 +56,18 @@ class SettingsController extends ChangeNotifier {
 
   Future<void> _init() async {
     _settings = await database.getSettings();
+    switch (_settings.normalizerMode) {
+      case 'LEGACY_RULE_BASED':
+        ScriptNormalizationEngine.activeMode = NormalizerMode.legacyRuleBased;
+        break;
+      case 'NEURAL_INDIC_XLIT':
+        ScriptNormalizationEngine.activeMode = NormalizerMode.neuralIndicXlit;
+        break;
+      case 'ADVANCED':
+      default:
+        ScriptNormalizationEngine.activeMode = NormalizerMode.advanced;
+        break;
+    }
     await checkModelStatus();
     notifyListeners();
 
@@ -71,6 +86,7 @@ class SettingsController extends ChangeNotifier {
     _isMtReady = await languagePackManager.isMtAvailable();
     _isMtFp16Ready = await languagePackManager.isMtFp16Available();
     _isRasa13Ready = await languagePackManager.isRasa13Available();
+    _isIndicXlitReady = await languagePackManager.isIndicXlitAvailable();
     for (final lang in LanguagePackManager.supportedLanguages) {
       _ttsReadyMap[lang.code] = await languagePackManager.isTtsAvailable(lang.code);
       _mmsReadyMap[lang.code] = await languagePackManager.isMmsAvailable(lang.code);
@@ -110,6 +126,16 @@ class SettingsController extends ChangeNotifier {
 
   Future<void> deleteRasa13() async {
     await languagePackManager.deleteRasa13();
+    await checkModelStatus();
+  }
+
+  Future<void> downloadIndicXlit() async {
+    await languagePackManager.downloadIndicXlit();
+    await checkModelStatus();
+  }
+
+  Future<void> deleteIndicXlit() async {
+    await languagePackManager.deleteIndicXlit();
     await checkModelStatus();
   }
 
@@ -236,6 +262,41 @@ class SettingsController extends ChangeNotifier {
     _settings = _settings.copyWith(pttMode: mode);
     await database.saveSettings(_settings);
     notifyListeners();
+  }
+
+  String get normalizerMode => _settings.normalizerMode;
+  bool get isAdvancedNormalizer => _settings.normalizerMode == 'ADVANCED';
+  bool get isLegacyNormalizer => _settings.normalizerMode == 'LEGACY_RULE_BASED';
+  bool get isNeuralIndicXlit => _settings.normalizerMode == 'NEURAL_INDIC_XLIT';
+
+  Future<void> updateNormalizerMode(String mode) async {
+    _settings = _settings.copyWith(normalizerMode: mode);
+    await database.saveSettings(_settings);
+    switch (mode) {
+      case 'LEGACY_RULE_BASED':
+        ScriptNormalizationEngine.activeMode = NormalizerMode.legacyRuleBased;
+        break;
+      case 'NEURAL_INDIC_XLIT':
+        ScriptNormalizationEngine.activeMode = NormalizerMode.neuralIndicXlit;
+        break;
+      case 'ADVANCED':
+      default:
+        ScriptNormalizationEngine.activeMode = NormalizerMode.advanced;
+        break;
+    }
+    notifyListeners();
+  }
+
+  Future<void> toggleNormalizerMode() async {
+    String next;
+    if (isAdvancedNormalizer) {
+      next = 'LEGACY_RULE_BASED';
+    } else if (isLegacyNormalizer) {
+      next = 'NEURAL_INDIC_XLIT';
+    } else {
+      next = 'ADVANCED';
+    }
+    await updateNormalizerMode(next);
   }
 
   @override

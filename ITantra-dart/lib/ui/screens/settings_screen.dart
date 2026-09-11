@@ -233,6 +233,17 @@ class SettingsScreen extends StatelessWidget {
                       onDownload: () => settingsController.downloadRasa13(),
                       onDelete: () => settingsController.deleteRasa13(),
                     ),
+                    const SizedBox(height: 6),
+
+                    // AI4Bharat IndicXlit Neural Transliteration
+                    _ModelStatusRow(
+                      title: 'Neural Transliteration (AI4Bharat IndicXlit / Aksharantar, ~35 MB)',
+                      modelKey: 'indicxlit',
+                      isReady: settingsController.isIndicXlitReady,
+                      downloadState: settingsController.downloadState,
+                      onDownload: () => settingsController.downloadIndicXlit(),
+                      onDelete: () => settingsController.deleteIndicXlit(),
+                    ),
                     const Divider(height: 24),
 
                     Row(
@@ -516,6 +527,63 @@ class SettingsScreen extends StatelessWidget {
                       onChanged: (val) =>
                           settingsController.updatePttMode(val ? 'HOLD' : 'TOGGLE'),
                       contentPadding: EdgeInsets.zero,
+                    ),
+                    const Divider(height: 24),
+                    Text(
+                      'Script Normalization & Transliteration Engine',
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Controls how cross-script Indic text and Latin phonetics are aligned between sender and receiver.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    RadioListTile<String>(
+                      title: const Text('Advanced Phonological Matrix (Recommended)'),
+                      subtitle: const Text('Linguistically authentic phoneme mapping across all 10 languages, proper Dravidian consonant collapsing (Tamil/Malayalam), and Neural IndicXlit ready.'),
+                      value: 'ADVANCED',
+                      groupValue: settings.normalizerMode,
+                      onChanged: (val) {
+                        if (val != null) settingsController.updateNormalizerMode(val);
+                      },
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                    RadioListTile<String>(
+                      title: const Text('Legacy Rule-Based Engine'),
+                      subtitle: const Text('Original ISCII Unicode block offset shift heuristic and basic lexicon.'),
+                      value: 'LEGACY_RULE_BASED',
+                      groupValue: settings.normalizerMode,
+                      onChanged: (val) {
+                        if (val != null) settingsController.updateNormalizerMode(val);
+                      },
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                    RadioListTile<String>(
+                      title: const Text('Neural IndicXlit (AI4Bharat Aksharantar)'),
+                      subtitle: const Text('Transformer-based neural seq2seq transliteration model (~35 MB ONNX) for contextual loanwords and script prediction.'),
+                      value: 'NEURAL_INDIC_XLIT',
+                      groupValue: settings.normalizerMode,
+                      onChanged: (val) {
+                        if (val != null) settingsController.updateNormalizerMode(val);
+                      },
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4, bottom: 6),
+                      child: _ModelStatusRow(
+                        title: 'IndicXlit Weights (~35 MB)',
+                        modelKey: 'indicxlit',
+                        isReady: settingsController.isIndicXlitReady,
+                        downloadState: settingsController.downloadState,
+                        onDownload: () => settingsController.downloadIndicXlit(),
+                        onDelete: () => settingsController.deleteIndicXlit(),
+                      ),
                     ),
                   ],
                 ),

@@ -59,7 +59,7 @@ class UserSettingsEntity {
     installedLanguagePacks: map['installedLanguagePacks'] as String? ?? 'hi,en',
     alertVolumeMax: (map['alertVolumeMax'] as int? ?? 1) == 1,
     autoPlayAudio: (map['autoPlayAudio'] as int? ?? 1) == 1,
-    isMtEnabled: (map['isMtEnabled'] as int? ?? 1) == 1,
+    isMtEnabled: (map['isMtEnabled'] as int? ?? map['enableTranslation'] as int? ?? 1) == 1,
     sttPrecision: map['sttPrecision'] as String? ?? 'INT8',
     mtPrecision: map['mtPrecision'] as String? ?? 'INT8',
     normalizerMode: map['normalizerMode'] as String? ?? 'ADVANCED',

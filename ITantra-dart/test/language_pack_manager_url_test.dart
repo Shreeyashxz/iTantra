@@ -51,5 +51,18 @@ void main() {
         client.close(force: true);
       }
     });
+    test('IndicXlit public model weights endpoint is reachable and valid', () async {
+      final client = HttpClient();
+      try {
+        final req = await client.getUrl(
+          Uri.parse('https://huggingface.co/ai4bharat/IndicXlit/resolve/main/indicxlit-en-indic-v1.0/transformer/indicxlit.pt'),
+        );
+        req.headers.set(HttpHeaders.userAgentHeader, 'Mozilla/5.0 (Mobile; Android)');
+        final res = await req.close();
+        expect(res.statusCode == 200 || res.statusCode == 307 || res.statusCode == 302, isTrue);
+      } finally {
+        client.close(force: true);
+      }
+    });
   });
 }

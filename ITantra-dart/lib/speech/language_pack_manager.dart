@@ -253,6 +253,16 @@ class LanguagePackManager {
     return (await data.length()) > 50 * 1024 * 1024;
   }
 
+  /// Checks if AI4Bharat IndicXlit neural model weights exist in local models storage
+  Future<bool> isIndicXlitAvailable() async {
+    final dir = await getModelsDirectory();
+    final model = File(p.join(dir.path, 'indicxlit.onnx'));
+    final modelSub = File(p.join(dir.path, 'xlit', 'indicxlit.onnx'));
+    if (await model.exists() && (await model.length()) > 1024) return true;
+    if (await modelSub.exists() && (await modelSub.length()) > 1024) return true;
+    return false;
+  }
+
   Future<bool> downloadMt() async {
     final modelsDir = await getModelsDirectory();
     final mtDir = Directory(p.join(modelsDir.path, 'mt'));
@@ -593,6 +603,54 @@ class LanguagePackManager {
       return true;
     } catch (e) {
       debugPrint('Error deleting Rasa-13 model: $e');
+      return false;
+    }
+  }
+
+  /// Downloads AI4Bharat IndicXlit Neural Weights (~35 MB ONNX model)
+  Future<bool> downloadIndicXlit() async {
+    final modelsDir = await getModelsDirectory();
+    final targetModel = File(p.join(modelsDir.path, 'indicxlit.onnx'));
+
+    if (await targetModel.exists() && (await targetModel.length()) > 1024) {
+      _emitState(const DownloadStateCompleted('AI4Bharat IndicXlit Neural Ready'));
+      return true;
+    }
+
+    const xlitUrl =
+        'https://huggingface.co/ai4bharat/IndicXlit/resolve/main/indicxlit-en-indic-v1.0/transformer/indicxlit.pt';
+
+    try {
+      _emitState(const DownloadStateDownloading('AI4Bharat IndicXlit Neural Weights (~35 MB)', 0, modelKey: 'indicxlit'));
+
+      await _downloadFileWithRedirects(xlitUrl, targetModel, (percent) {
+        _emitState(DownloadStateDownloading('IndicXlit Neural Weights', percent, modelKey: 'indicxlit'));
+      });
+
+      _emitState(const DownloadStateCompleted('AI4Bharat IndicXlit Neural Ready'));
+      return true;
+    } catch (e) {
+      debugPrint('Error downloading IndicXlit neural model: $e');
+      _emitState(DownloadStateError('IndicXlit download failed: $e'));
+      return false;
+    }
+  }
+
+  Future<bool> deleteIndicXlit() async {
+    try {
+      final modelsDir = await getModelsDirectory();
+      final targetFile = File(p.join(modelsDir.path, 'indicxlit.onnx'));
+      final targetSubdir = File(p.join(modelsDir.path, 'xlit', 'indicxlit.onnx'));
+      if (await targetFile.exists()) {
+        await targetFile.delete();
+      }
+      if (await targetSubdir.exists()) {
+        await targetSubdir.delete();
+      }
+      _emitState(const DownloadStateCompleted('IndicXlit model deleted'));
+      return true;
+    } catch (e) {
+      debugPrint('Error deleting IndicXlit model: $e');
       return false;
     }
   }

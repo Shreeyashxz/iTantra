@@ -34,9 +34,10 @@ class AppDatabase {
 
     return await openDatabase(
       path,
-      version: 9,
+      version: 10,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
+      onOpen: _ensureSchema,
     );
   }
 
@@ -131,6 +132,46 @@ class AppDatabase {
       try {
         await db.execute("ALTER TABLE user_settings ADD COLUMN normalizerMode TEXT NOT NULL DEFAULT 'ADVANCED'");
       } catch (_) {}
+    }
+    if (oldVersion < 10) {
+      await _ensureSchema(db);
+    }
+  }
+
+  /// Self-healing schema validation: ensures all columns exist regardless of previous upgrade anomalies.
+  Future<void> _ensureSchema(Database db) async {
+    try {
+      final info = await db.rawQuery('PRAGMA table_info(user_settings)');
+      final existingCols = info.map((c) => c['name'] as String).toSet();
+
+      // If database had legacy 'enableTranslation' instead of 'isMtEnabled'
+      if (!existingCols.contains('isMtEnabled')) {
+        await db.execute("ALTER TABLE user_settings ADD COLUMN isMtEnabled INTEGER NOT NULL DEFAULT 1");
+        if (existingCols.contains('enableTranslation')) {
+          await db.execute("UPDATE user_settings SET isMtEnabled = enableTranslation");
+        }
+      }
+
+      if (!existingCols.contains('ttsGender')) {
+        await db.execute("ALTER TABLE user_settings ADD COLUMN ttsGender TEXT NOT NULL DEFAULT 'FEMALE'");
+      }
+      if (!existingCols.contains('vadSensitivity')) {
+        await db.execute("ALTER TABLE user_settings ADD COLUMN vadSensitivity REAL NOT NULL DEFAULT 0.6");
+      }
+      if (!existingCols.contains('ttsEngineType')) {
+        await db.execute("ALTER TABLE user_settings ADD COLUMN ttsEngineType TEXT NOT NULL DEFAULT 'AI4BHARAT_RASA'");
+      }
+      if (!existingCols.contains('sttPrecision')) {
+        await db.execute("ALTER TABLE user_settings ADD COLUMN sttPrecision TEXT NOT NULL DEFAULT 'INT8'");
+      }
+      if (!existingCols.contains('mtPrecision')) {
+        await db.execute("ALTER TABLE user_settings ADD COLUMN mtPrecision TEXT NOT NULL DEFAULT 'INT8'");
+      }
+      if (!existingCols.contains('normalizerMode')) {
+        await db.execute("ALTER TABLE user_settings ADD COLUMN normalizerMode TEXT NOT NULL DEFAULT 'ADVANCED'");
+      }
+    } catch (e) {
+      debugPrint('[Database] Schema self-healing notice: $e');
     }
   }
 

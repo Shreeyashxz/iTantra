@@ -89,11 +89,13 @@ class _LanguageSetupScreenState extends State<LanguageSetupScreen> {
                       children: [
                         Icon(Icons.satellite_alt_rounded, color: theme.colorScheme.primary),
                         const SizedBox(width: 10),
-                        Text(
-                          'iTantra Neural Transceiver',
-                          style: theme.textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.bold,
-                            color: theme.colorScheme.onPrimaryContainer,
+                        Expanded(
+                          child: Text(
+                            'iTantra Neural Transceiver',
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.bold,
+                              color: theme.colorScheme.onPrimaryContainer,
+                            ),
                           ),
                         ),
                       ],

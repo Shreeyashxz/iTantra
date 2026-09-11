@@ -54,7 +54,8 @@ void main() {
               autoPlayAudio INTEGER NOT NULL DEFAULT 1,
               isMtEnabled INTEGER NOT NULL DEFAULT 1,
               sttPrecision TEXT NOT NULL DEFAULT 'INT8',
-              mtPrecision TEXT NOT NULL DEFAULT 'INT8'
+              mtPrecision TEXT NOT NULL DEFAULT 'INT8',
+              normalizerMode TEXT NOT NULL DEFAULT 'ADVANCED'
             )
           ''');
         },
@@ -120,6 +121,7 @@ void main() {
       expect(retrieved.isMtEnabled, isTrue);
       expect(retrieved.sttPrecision, equals('INT8'));
       expect(retrieved.mtPrecision, equals('FP16'));
+      expect(retrieved.normalizerMode, equals('ADVANCED'));
     });
   });
 }

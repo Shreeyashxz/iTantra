@@ -79,6 +79,45 @@ class TransceiverController extends ChangeNotifier {
     }
   }
 
+  /// Active Script Normalizer Mode ('ADVANCED', 'LEGACY_RULE_BASED', or 'NEURAL_INDIC_XLIT')
+  String _normalizerMode = 'ADVANCED';
+  String get normalizerMode => _normalizerMode;
+  bool get isAdvancedNormalizer => _normalizerMode == 'ADVANCED';
+  bool get isLegacyNormalizer => _normalizerMode == 'LEGACY_RULE_BASED';
+  bool get isNeuralIndicXlit => _normalizerMode == 'NEURAL_INDIC_XLIT';
+
+  Future<void> toggleNormalizerMode() async {
+    String next;
+    if (isAdvancedNormalizer) {
+      next = 'LEGACY_RULE_BASED';
+    } else if (isLegacyNormalizer) {
+      next = 'NEURAL_INDIC_XLIT';
+    } else {
+      next = 'ADVANCED';
+    }
+    _normalizerMode = next;
+    switch (next) {
+      case 'LEGACY_RULE_BASED':
+        ScriptNormalizationEngine.activeMode = NormalizerMode.legacyRuleBased;
+        break;
+      case 'NEURAL_INDIC_XLIT':
+        ScriptNormalizationEngine.activeMode = NormalizerMode.neuralIndicXlit;
+        break;
+      case 'ADVANCED':
+      default:
+        ScriptNormalizationEngine.activeMode = NormalizerMode.advanced;
+        break;
+    }
+    notifyListeners();
+    try {
+      final settings = await database.getSettings();
+      await database.saveSettings(settings.copyWith(normalizerMode: _normalizerMode));
+      debugPrint('[TransceiverController] Normalizer Mode switched to: $_normalizerMode');
+    } catch (e) {
+      debugPrint('[TransceiverController] Error saving normalizer mode switch: $e');
+    }
+  }
+
   StreamSubscription<TransceiverPacket>? _packetSubscription;
   StreamSubscription<AlertEvent?>? _alertSubscription;
   StreamSubscription<String>? _statusSubscription;
@@ -104,6 +143,19 @@ class TransceiverController extends ChangeNotifier {
     final initialSettings = await database.getSettings();
     _isMtEnabled = initialSettings.isMtEnabled;
     _ttsEngineType = initialSettings.ttsEngineType;
+    _normalizerMode = initialSettings.normalizerMode;
+    switch (_normalizerMode) {
+      case 'LEGACY_RULE_BASED':
+        ScriptNormalizationEngine.activeMode = NormalizerMode.legacyRuleBased;
+        break;
+      case 'NEURAL_INDIC_XLIT':
+        ScriptNormalizationEngine.activeMode = NormalizerMode.neuralIndicXlit;
+        break;
+      case 'ADVANCED':
+      default:
+        ScriptNormalizationEngine.activeMode = NormalizerMode.advanced;
+        break;
+    }
 
     // Load initial message history
     _messages = await database.getAllMessages();
