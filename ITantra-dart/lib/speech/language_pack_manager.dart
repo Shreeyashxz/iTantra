@@ -239,18 +239,90 @@ class LanguagePackManager {
 
   Future<bool> isMtAvailable() async {
     final dir = await getModelsDirectory();
+    final subModel = File(p.join(dir.path, 'mt', 'int8', 'encoder_model.onnx'));
+    final subData = File(p.join(dir.path, 'mt', 'int8', 'encoder_model.onnx.data'));
+    final subSpm = File(p.join(dir.path, 'mt', 'int8', 'spm.model'));
+    if (await subModel.exists() && await subData.exists() && await subSpm.exists()) {
+      return (await subData.length()) > 50 * 1024 * 1024;
+    }
+    // Backward compatibility with legacy flat directory layout
     final model = File(p.join(dir.path, 'mt', 'indictrans2_int8.onnx'));
-    final spm = File(p.join(dir.path, 'mt', 'spm.model'));
-    return await model.exists() && await spm.exists();
-  }
-
-  Future<bool> isMtFp16Available() async {
-    final dir = await getModelsDirectory();
-    final model = File(p.join(dir.path, 'mt', 'indictrans2_fp16.onnx'));
     final data = File(p.join(dir.path, 'mt', 'encoder_model.onnx.data'));
     final spm = File(p.join(dir.path, 'mt', 'spm.model'));
     if (!await model.exists() || !await data.exists() || !await spm.exists()) return false;
     return (await data.length()) > 50 * 1024 * 1024;
+  }
+
+  Future<bool> isMtFp16Available() async {
+    final dir = await getModelsDirectory();
+    final subModel = File(p.join(dir.path, 'mt', 'fp16', 'encoder_model.onnx'));
+    final subData = File(p.join(dir.path, 'mt', 'fp16', 'encoder_model.onnx.data'));
+    final subSpm = File(p.join(dir.path, 'mt', 'fp16', 'spm.model'));
+    if (await subModel.exists() && await subData.exists() && await subSpm.exists()) {
+      return (await subData.length()) > 100 * 1024 * 1024;
+    }
+    // Backward compatibility with legacy flat directory layout
+    final model = File(p.join(dir.path, 'mt', 'indictrans2_fp16.onnx'));
+    final data = File(p.join(dir.path, 'mt', 'encoder_model.onnx.data'));
+    final spm = File(p.join(dir.path, 'mt', 'spm.model'));
+    if (!await model.exists() || !await data.exists() || !await spm.exists()) return false;
+    return (await data.length()) > 100 * 1024 * 1024;
+  }
+
+  /// Checks if AI4Bharat IndicLID FastText model weights exist in local models storage
+  Future<bool> isLidAvailable() async {
+    final dir = await getModelsDirectory();
+    final target = File(p.join(dir.path, 'lid', 'indiclid_fasttext.bin'));
+    final targetRoot = File(p.join(dir.path, 'indiclid_fasttext.bin'));
+    if (await target.exists() && (await target.length()) > 1024) return true;
+    if (await targetRoot.exists() && (await targetRoot.length()) > 1024) return true;
+    return false;
+  }
+
+  /// Downloads AI4Bharat IndicLID FastText (~14 MB model weights)
+  Future<bool> downloadLid() async {
+    final modelsDir = await getModelsDirectory();
+    final lidDir = Directory(p.join(modelsDir.path, 'lid'));
+    if (!await lidDir.exists()) {
+      await lidDir.create(recursive: true);
+    }
+    final targetFile = File(p.join(lidDir.path, 'indiclid_fasttext.bin'));
+
+    if (await targetFile.exists() && (await targetFile.length()) > 1024) {
+      _emitState(const DownloadStateCompleted('IndicLID-FastText Ready'));
+      return true;
+    }
+
+    const lidUrl =
+        'https://huggingface.co/ai4bharat/IndicLID-FTN/resolve/main/model_baseline_roman.bin';
+
+    try {
+      _emitState(const DownloadStateDownloading('AI4Bharat IndicLID-FastText (~14 MB)', 0, modelKey: 'lid'));
+      await _downloadFileWithRedirects(lidUrl, targetFile, (percent) {
+        _emitState(DownloadStateDownloading('IndicLID-FastText (~14 MB)', percent, modelKey: 'lid'));
+      });
+      _emitState(const DownloadStateCompleted('AI4Bharat IndicLID-FastText Ready'));
+      return true;
+    } catch (e) {
+      debugPrint('Error downloading IndicLID-FastText: $e');
+      _emitState(DownloadStateError('IndicLID download failed: $e'));
+      return false;
+    }
+  }
+
+  Future<bool> deleteLid() async {
+    try {
+      final modelsDir = await getModelsDirectory();
+      final targetFile = File(p.join(modelsDir.path, 'lid', 'indiclid_fasttext.bin'));
+      final targetRoot = File(p.join(modelsDir.path, 'indiclid_fasttext.bin'));
+      if (await targetFile.exists()) await targetFile.delete();
+      if (await targetRoot.exists()) await targetRoot.delete();
+      _emitState(const DownloadStateCompleted('IndicLID model deleted'));
+      return true;
+    } catch (e) {
+      debugPrint('Error deleting IndicLID model: $e');
+      return false;
+    }
   }
 
   /// Checks if AI4Bharat IndicXlit neural model weights exist in local models storage
@@ -265,32 +337,55 @@ class LanguagePackManager {
 
   Future<bool> downloadMt() async {
     final modelsDir = await getModelsDirectory();
-    final mtDir = Directory(p.join(modelsDir.path, 'mt'));
+    final mtDir = Directory(p.join(modelsDir.path, 'mt', 'int8'));
     if (!await mtDir.exists()) {
       await mtDir.create(recursive: true);
     }
 
-    final targetModel = File(p.join(mtDir.path, 'indictrans2_int8.onnx'));
+    final targetModel = File(p.join(mtDir.path, 'encoder_model.onnx'));
+    final targetData = File(p.join(mtDir.path, 'encoder_model.onnx.data'));
     final targetSpm = File(p.join(mtDir.path, 'spm.model'));
+    final targetDict = File(p.join(mtDir.path, 'dict.SRC.json'));
+    final legacyModel = File(p.join(modelsDir.path, 'mt', 'indictrans2_int8.onnx'));
 
     // Public ungated AI4Bharat IndicTrans2 INT8 ONNX checkpoint
     const mtBaseUrl =
         'https://huggingface.co/hari31416/indictrans2-indic-indic-dist-320M-ONNX-int8/resolve/main';
 
     try {
-      _emitState(const DownloadStateDownloading('AI4Bharat IndicTrans2 INT8 (Model)', 0, modelKey: 'mt'));
+      _emitState(const DownloadStateDownloading('AI4Bharat IndicTrans2 INT8 (Graph)', 0, modelKey: 'mt'));
 
-      // 1. Download Quantized Encoder ONNX weights
+      // 1. Download Quantized Encoder ONNX computational graph (~831 KB)
       if (!await targetModel.exists() || await targetModel.length() < 1024) {
         await _downloadFileWithRedirects('$mtBaseUrl/encoder_model.onnx', targetModel, (percent) {
-          _emitState(DownloadStateDownloading('IndicTrans2 INT8 Encoder', percent, modelKey: 'mt'));
+          _emitState(DownloadStateDownloading('IndicTrans2 INT8 Graph', percent, modelKey: 'mt'));
+        });
+      }
+      try {
+        if (!await legacyModel.parent.exists()) await legacyModel.parent.create(recursive: true);
+        if (!await legacyModel.exists() || await legacyModel.length() < 1024) {
+          await targetModel.copy(legacyModel.path);
+        }
+      } catch (_) {}
+
+      // 2. Download INT8 Tensor Weights (~120 MB)
+      if (!await targetData.exists() || await targetData.length() < 50 * 1024 * 1024) {
+        await _downloadFileWithRedirects('$mtBaseUrl/encoder_model.onnx.data', targetData, (percent) {
+          _emitState(DownloadStateDownloading('IndicTrans2 INT8 Weights (~120 MB)', percent, modelKey: 'mt'));
         });
       }
 
-      // 2. Download Dictionary & Tokenizer mapping
-      if (!await targetSpm.exists() || await targetSpm.length() < 100) {
-        await _downloadFileWithRedirects('$mtBaseUrl/dict.SRC.json', targetSpm, (percent) {
-          _emitState(DownloadStateDownloading('IndicTrans2 Dictionary & Tokens', percent, modelKey: 'mt'));
+      // 3. Download SentencePiece Tokenizer Model (~3.25 MB)
+      if (!await targetSpm.exists() || await targetSpm.length() < 1000) {
+        await _downloadFileWithRedirects('$mtBaseUrl/model.SRC', targetSpm, (percent) {
+          _emitState(DownloadStateDownloading('IndicTrans2 Tokenizer Model', percent, modelKey: 'mt'));
+        });
+      }
+
+      // 4. Download Dictionary & Token mapping (~3.39 MB)
+      if (!await targetDict.exists() || await targetDict.length() < 100) {
+        await _downloadFileWithRedirects('$mtBaseUrl/dict.SRC.json', targetDict, (percent) {
+          _emitState(DownloadStateDownloading('IndicTrans2 Dictionary', percent, modelKey: 'mt'));
         });
       }
 
@@ -305,40 +400,55 @@ class LanguagePackManager {
 
   Future<bool> downloadMtFp16() async {
     final modelsDir = await getModelsDirectory();
-    final mtDir = Directory(p.join(modelsDir.path, 'mt'));
+    final mtDir = Directory(p.join(modelsDir.path, 'mt', 'fp16'));
     if (!await mtDir.exists()) {
       await mtDir.create(recursive: true);
     }
 
-    final targetModel = File(p.join(mtDir.path, 'indictrans2_fp16.onnx'));
+    final targetModel = File(p.join(mtDir.path, 'encoder_model.onnx'));
     final targetData = File(p.join(mtDir.path, 'encoder_model.onnx.data'));
     final targetSpm = File(p.join(mtDir.path, 'spm.model'));
+    final targetDict = File(p.join(mtDir.path, 'dict.SRC.json'));
+    final legacyModel = File(p.join(modelsDir.path, 'mt', 'indictrans2_fp16.onnx'));
 
     // Public ungated AI4Bharat IndicTrans2 FP16 ONNX checkpoint from same creator (hari31416)
     const mtFp16BaseUrl =
         'https://huggingface.co/hari31416/indictrans2-indic-indic-dist-320M-ONNX-fp16/resolve/main';
 
     try {
-      _emitState(const DownloadStateDownloading('AI4Bharat IndicTrans2 FP16 (Model)', 0, modelKey: 'mt_fp16'));
+      _emitState(const DownloadStateDownloading('AI4Bharat IndicTrans2 FP16 (Graph)', 0, modelKey: 'mt_fp16'));
 
-      // 1. Download Full Precision Encoder ONNX computational graph
+      // 1. Download Full Precision Encoder ONNX computational graph (~831 KB)
       if (!await targetModel.exists() || await targetModel.length() < 1024) {
         await _downloadFileWithRedirects('$mtFp16BaseUrl/encoder_model.onnx', targetModel, (percent) {
           _emitState(DownloadStateDownloading('IndicTrans2 FP16 Graph', percent, modelKey: 'mt_fp16'));
         });
       }
+      try {
+        if (!await legacyModel.parent.exists()) await legacyModel.parent.create(recursive: true);
+        if (!await legacyModel.exists() || await legacyModel.length() < 1024) {
+          await targetModel.copy(legacyModel.path);
+        }
+      } catch (_) {}
 
       // 2. Download FP16 Tensor Weights (~239 MB)
-      if (!await targetData.exists() || await targetData.length() < 50 * 1024 * 1024) {
+      if (!await targetData.exists() || await targetData.length() < 100 * 1024 * 1024) {
         await _downloadFileWithRedirects('$mtFp16BaseUrl/encoder_model.onnx.data', targetData, (percent) {
-          _emitState(DownloadStateDownloading('IndicTrans2 FP16 Weights (~239MB)', percent, modelKey: 'mt_fp16'));
+          _emitState(DownloadStateDownloading('IndicTrans2 FP16 Weights (~239 MB)', percent, modelKey: 'mt_fp16'));
         });
       }
 
-      // 3. Download Dictionary & Tokenizer mapping
-      if (!await targetSpm.exists() || await targetSpm.length() < 100) {
-        await _downloadFileWithRedirects('$mtFp16BaseUrl/dict.SRC.json', targetSpm, (percent) {
-          _emitState(DownloadStateDownloading('IndicTrans2 Dictionary & Tokens', percent, modelKey: 'mt_fp16'));
+      // 3. Download SentencePiece Tokenizer Model (~3.25 MB)
+      if (!await targetSpm.exists() || await targetSpm.length() < 1000) {
+        await _downloadFileWithRedirects('$mtFp16BaseUrl/model.SRC', targetSpm, (percent) {
+          _emitState(DownloadStateDownloading('IndicTrans2 FP16 Tokenizer Model', percent, modelKey: 'mt_fp16'));
+        });
+      }
+
+      // 4. Download Dictionary & Token mapping (~3.39 MB)
+      if (!await targetDict.exists() || await targetDict.length() < 100) {
+        await _downloadFileWithRedirects('$mtFp16BaseUrl/dict.SRC.json', targetDict, (percent) {
+          _emitState(DownloadStateDownloading('IndicTrans2 FP16 Dictionary', percent, modelKey: 'mt_fp16'));
         });
       }
 
@@ -354,18 +464,13 @@ class LanguagePackManager {
   Future<bool> deleteMt() async {
     try {
       final modelsDir = await getModelsDirectory();
-      final targetModel = File(p.join(modelsDir.path, 'mt', 'indictrans2_int8.onnx'));
-      if (await targetModel.exists()) {
-        await targetModel.delete();
+      final subDir = Directory(p.join(modelsDir.path, 'mt', 'int8'));
+      if (await subDir.exists()) {
+        await subDir.delete(recursive: true);
       }
-      // If FP16 also doesn't exist, purge entire mt directory
-      final fp16Model = File(p.join(modelsDir.path, 'mt', 'indictrans2_fp16.onnx'));
-      if (!await fp16Model.exists()) {
-        final mtDir = Directory(p.join(modelsDir.path, 'mt'));
-        if (await mtDir.exists()) {
-          await mtDir.delete(recursive: true);
-        }
-      }
+      final legacyModel = File(p.join(modelsDir.path, 'mt', 'indictrans2_int8.onnx'));
+      if (await legacyModel.exists()) await legacyModel.delete();
+
       _emitState(const DownloadStateCompleted('IndicTrans2 INT8 model deleted'));
       return true;
     } catch (e) {
@@ -377,22 +482,13 @@ class LanguagePackManager {
   Future<bool> deleteMtFp16() async {
     try {
       final modelsDir = await getModelsDirectory();
-      final targetModel = File(p.join(modelsDir.path, 'mt', 'indictrans2_fp16.onnx'));
-      final targetData = File(p.join(modelsDir.path, 'mt', 'encoder_model.onnx.data'));
-      if (await targetModel.exists()) {
-        await targetModel.delete();
+      final subDir = Directory(p.join(modelsDir.path, 'mt', 'fp16'));
+      if (await subDir.exists()) {
+        await subDir.delete(recursive: true);
       }
-      if (await targetData.exists()) {
-        await targetData.delete();
-      }
-      // If INT8 also doesn't exist, purge entire mt directory
-      final int8Model = File(p.join(modelsDir.path, 'mt', 'indictrans2_int8.onnx'));
-      if (!await int8Model.exists()) {
-        final mtDir = Directory(p.join(modelsDir.path, 'mt'));
-        if (await mtDir.exists()) {
-          await mtDir.delete(recursive: true);
-        }
-      }
+      final legacyModel = File(p.join(modelsDir.path, 'mt', 'indictrans2_fp16.onnx'));
+      if (await legacyModel.exists()) await legacyModel.delete();
+
       _emitState(const DownloadStateCompleted('IndicTrans2 FP16 model deleted'));
       return true;
     } catch (e) {
@@ -737,6 +833,7 @@ class LanguagePackManager {
     void Function(int percent) onProgress,
   ) async {
     final client = HttpClient();
+    client.connectionTimeout = const Duration(seconds: 30);
     try {
       var currentUri = Uri.parse(urlStr);
       HttpClientResponse? response;
@@ -754,6 +851,7 @@ class LanguagePackManager {
             response.statusCode == HttpStatus.temporaryRedirect ||
             response.statusCode == HttpStatus.permanentRedirect) {
           final location = response.headers.value(HttpHeaders.locationHeader);
+          await response.drain<void>();
           if (location != null) {
             currentUri = currentUri.resolve(location);
             redirects++;

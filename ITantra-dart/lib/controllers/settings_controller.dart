@@ -35,6 +35,9 @@ class SettingsController extends ChangeNotifier {
   bool _isIndicXlitReady = false;
   bool get isIndicXlitReady => _isIndicXlitReady;
 
+  bool _isLidReady = false;
+  bool get isLidReady => _isLidReady;
+
   final Map<String, bool> _ttsReadyMap = {};
   bool isTtsReady(String lang) => _ttsReadyMap[lang] ?? false;
   bool get isEnTtsReady => isTtsReady('en');
@@ -87,6 +90,7 @@ class SettingsController extends ChangeNotifier {
     _isMtFp16Ready = await languagePackManager.isMtFp16Available();
     _isRasa13Ready = await languagePackManager.isRasa13Available();
     _isIndicXlitReady = await languagePackManager.isIndicXlitAvailable();
+    _isLidReady = await languagePackManager.isLidAvailable();
     for (final lang in LanguagePackManager.supportedLanguages) {
       _ttsReadyMap[lang.code] = await languagePackManager.isTtsAvailable(lang.code);
       _mmsReadyMap[lang.code] = await languagePackManager.isMmsAvailable(lang.code);
@@ -136,6 +140,16 @@ class SettingsController extends ChangeNotifier {
 
   Future<void> deleteIndicXlit() async {
     await languagePackManager.deleteIndicXlit();
+    await checkModelStatus();
+  }
+
+  Future<void> downloadLid() async {
+    await languagePackManager.downloadLid();
+    await checkModelStatus();
+  }
+
+  Future<void> deleteLid() async {
+    await languagePackManager.deleteLid();
     await checkModelStatus();
   }
 

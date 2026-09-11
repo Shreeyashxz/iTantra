@@ -229,6 +229,7 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
     results['mt_fp16'] = await _lpm.isMtFp16Available();
     results['mt'] = (results['mt_int8'] ?? false) || (results['mt_fp16'] ?? false);
     results['tts_rasa13'] = await _lpm.isRasa13Available();
+    results['lid'] = await _lpm.isLidAvailable();
     for (final lang in LanguagePackManager.supportedLanguages) {
       results['tts_mms_${lang.code}'] = await _lpm.isMmsAvailable(lang.code);
     }
@@ -2040,6 +2041,80 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
             );
           }).toList(),
         ),
+        const SizedBox(height: 12),
+
+        // Sub-tier 3: OS Native TTS
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFF00E5FF).withAlpha(15),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: const Color(0xFF00E5FF).withAlpha(50),
+              width: 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Text(
+                          'OS Native TTS Engine (Windows OneCore / Android TTS / iOS)',
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: AppTheme.telemetryGreen.withAlpha(30),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: const Text(
+                            'ALWAYS READY (0 MB)',
+                            style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: AppTheme.telemetryGreen),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    const Text(
+                      'Zero-download built-in OS speech synthesis • Covers Gujarati, Odia, English & all 10 SIH languages',
+                      style: TextStyle(fontSize: 10, color: Colors.grey),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF00E5FF).withAlpha(180),
+                  foregroundColor: Colors.black,
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                ),
+                onPressed: () async {
+                  context.read<SettingsController>().updateTtsEngineType('OS_NATIVE');
+                  await _loadTts('en', 'OS_NATIVE');
+                  if (mounted) {
+                    setState(() {
+                      _t2Engine = 'OS_NATIVE';
+                      _t3Engine = 'OS_NATIVE';
+                      _t4Engine = 'OS_NATIVE';
+                      _t5Engine = 'OS_NATIVE';
+                    });
+                  }
+                },
+                child: const Text('Use OS Native', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ),
+        ),
       ],
     );
   }
@@ -2471,6 +2546,43 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
     );
   }
 
+  // --- Helper: Warning banner when Rasa-13 is selected for unsupported languages (gu, or, en) ---
+  Widget _buildRasaWarning(String engine, String lang) {
+    if (engine != 'AI4BHARAT_RASA') return const SizedBox.shrink();
+    if (!const {'gu', 'or', 'en'}.contains(lang.toLowerCase())) return const SizedBox.shrink();
+
+    final langName = LanguagePackManager.supportedLanguages
+        .firstWhere((l) => l.code == lang.toLowerCase(),
+            orElse: () => LanguageMetadata(code: lang, iso3: '', englishName: lang.toUpperCase(), nativeName: ''))
+        .englishName;
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.amber.withAlpha(30),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.amber.shade700, width: 1.2),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.warning_amber_rounded, size: 18, color: Colors.amber.shade700),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Rasa-13 lacks $langName ($lang). The audio engine will automatically route synthesis to Meta MMS / OS Native fallback.',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: Colors.amber.shade800,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   // =========================================================================
   // THE 7 TEST CARDS
   // =========================================================================
@@ -2557,6 +2669,7 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
                   items: const [
                     DropdownMenuItem(value: 'META_MMS', child: Text('Meta MMS VITS')),
                     DropdownMenuItem(value: 'AI4BHARAT_RASA', child: Text('AI4Bharat Rasa-13')),
+                    DropdownMenuItem(value: 'OS_NATIVE', child: Text('OS Native (System)')),
                   ],
                   onChanged: (val) {
                     if (val != null) {
@@ -2590,6 +2703,7 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
               _ensureTtsLoaded(l, _t2Engine);
             },
           ),
+          _buildRasaWarning(_t2Engine, _t2Lang),
           _buildPresetChips(
             langCode: _t2Lang,
             onSelectPreset: (p) => setState(() => _t2Controller.text = p),
@@ -2680,6 +2794,7 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
                   items: const [
                     DropdownMenuItem(value: 'META_MMS', child: Text('Meta MMS VITS')),
                     DropdownMenuItem(value: 'AI4BHARAT_RASA', child: Text('AI4Bharat Rasa-13')),
+                    DropdownMenuItem(value: 'OS_NATIVE', child: Text('OS Native (System)')),
                   ],
                   onChanged: (val) {
                     if (val != null) {
@@ -2713,6 +2828,7 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
               _ensureTtsLoaded(l, _t3Engine);
             },
           ),
+          _buildRasaWarning(_t3Engine, _t3Lang),
           _buildPresetChips(
             langCode: _t3Lang,
             onSelectPreset: (p) => setState(() => _t3Controller.text = p),

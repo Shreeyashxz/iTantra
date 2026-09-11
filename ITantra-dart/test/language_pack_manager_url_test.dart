@@ -39,7 +39,11 @@ void main() {
       try {
         final endpoints = [
           'https://huggingface.co/hari31416/indictrans2-indic-indic-dist-320M-ONNX-int8/resolve/main/encoder_model.onnx',
+          'https://huggingface.co/hari31416/indictrans2-indic-indic-dist-320M-ONNX-int8/resolve/main/encoder_model.onnx.data',
+          'https://huggingface.co/hari31416/indictrans2-indic-indic-dist-320M-ONNX-int8/resolve/main/model.SRC',
           'https://huggingface.co/hari31416/indictrans2-indic-indic-dist-320M-ONNX-fp16/resolve/main/encoder_model.onnx',
+          'https://huggingface.co/hari31416/indictrans2-indic-indic-dist-320M-ONNX-fp16/resolve/main/encoder_model.onnx.data',
+          'https://huggingface.co/hari31416/indictrans2-indic-indic-dist-320M-ONNX-fp16/resolve/main/model.SRC',
         ];
         for (final url in endpoints) {
           final req = await client.getUrl(Uri.parse(url));
@@ -51,6 +55,21 @@ void main() {
         client.close(force: true);
       }
     });
+
+    test('IndicLID FastText public model weights endpoint is reachable and valid', () async {
+      final client = HttpClient();
+      try {
+        final req = await client.getUrl(
+          Uri.parse('https://huggingface.co/ai4bharat/IndicLID-FTN/resolve/main/model_baseline_roman.bin'),
+        );
+        req.headers.set(HttpHeaders.userAgentHeader, 'Mozilla/5.0 (Mobile; Android)');
+        final res = await req.close();
+        expect(res.statusCode == 200 || res.statusCode == 307 || res.statusCode == 302, isTrue);
+      } finally {
+        client.close(force: true);
+      }
+    });
+
     test('IndicXlit public model weights endpoint is reachable and valid', () async {
       final client = HttpClient();
       try {

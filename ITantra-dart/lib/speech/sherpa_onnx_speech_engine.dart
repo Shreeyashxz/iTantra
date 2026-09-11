@@ -9,6 +9,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 import 'language_pack_manager.dart';
+import 'os_native_tts_service.dart';
 import 'script_normalization_engine.dart';
 import 'speech_engine.dart';
 
@@ -291,12 +292,37 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
   // TTS (Text-to-Speech) — Studio Native Voice Engine
   // ==========================================
 
-  /// Initialize TTS for a given language from downloaded VITS ONNX model.
+  /// Initialize TTS for a given language from downloaded VITS ONNX model or OS Native.
   Future<bool> initTts(String languageCode, [String ttsEngineType = 'META_MMS']) async {
-    // English defaults to Meta MMS across the board unless Rasa-13 is explicitly requested
-    final effectiveEngineType = (languageCode == 'en' && ttsEngineType != 'AI4BHARAT_RASA')
-        ? 'META_MMS'
-        : ttsEngineType;
+    // OS Native TTS does not require loading an ONNX model into memory
+    if (ttsEngineType == 'OS_NATIVE') {
+      await OsNativeTtsService.instance.init();
+      return true;
+    }
+
+    // Guard: AI4Bharat Rasa-13 does not support Gujarati ('gu'), Odia ('or'), or English ('en')
+    const unsupportedRasaLangs = {'gu', 'or', 'en'};
+    var effectiveEngineType = ttsEngineType;
+    if (effectiveEngineType == 'AI4BHARAT_RASA' &&
+        unsupportedRasaLangs.contains(languageCode.toLowerCase())) {
+      final langName = LanguagePackManager.supportedLanguages
+          .firstWhere((l) => l.code == languageCode.toLowerCase(),
+              orElse: () => LanguageMetadata(
+                  code: languageCode,
+                  iso3: '',
+                  englishName: languageCode,
+                  nativeName: ''))
+          .englishName;
+      debugPrint(
+        '⚠️ [TTS WARNING] AI4Bharat Rasa-13 does NOT support $langName ($languageCode). '
+        'Bypassing Rasa-13 to prevent silence or pronunciation distortion. Automatically falling back to Meta MMS-TTS.',
+      );
+      effectiveEngineType = 'META_MMS';
+    } else if (languageCode == 'en' &&
+        effectiveEngineType != 'AI4BHARAT_RASA' &&
+        effectiveEngineType != 'OS_NATIVE') {
+      effectiveEngineType = 'META_MMS';
+    }
 
     // AI4Bharat Rasa-13 is universal across all 13 languages — deduplicate in RAM under a single key
     final engineKey = effectiveEngineType == 'AI4BHARAT_RASA'
@@ -417,10 +443,37 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
   ]) async {
     if (text.trim().isEmpty) return;
 
-    // English defaults to Meta MMS across the board unless Rasa-13 is explicitly requested
-    final effectiveEngine = (languageCode == 'en' && ttsEngineType != 'AI4BHARAT_RASA')
-        ? 'META_MMS'
-        : ttsEngineType;
+    // Guard: AI4Bharat Rasa-13 does not support Gujarati ('gu'), Odia ('or'), or English ('en')
+    const unsupportedRasaLangs = {'gu', 'or', 'en'};
+    var effectiveEngine = ttsEngineType;
+    if (effectiveEngine == 'AI4BHARAT_RASA' &&
+        unsupportedRasaLangs.contains(languageCode.toLowerCase())) {
+      final langName = LanguagePackManager.supportedLanguages
+          .firstWhere((l) => l.code == languageCode.toLowerCase(),
+              orElse: () => LanguageMetadata(
+                  code: languageCode,
+                  iso3: '',
+                  englishName: languageCode,
+                  nativeName: ''))
+          .englishName;
+      debugPrint(
+        '⚠️ [TTS WARNING] AI4Bharat Rasa-13 does NOT support $langName ($languageCode). '
+        'Bypassing Rasa-13 and using Meta MMS-TTS fallback to guarantee clear speech output.',
+      );
+      effectiveEngine = 'META_MMS';
+    } else if (languageCode == 'en' &&
+        effectiveEngine != 'AI4BHARAT_RASA' &&
+        effectiveEngine != 'OS_NATIVE') {
+      effectiveEngine = 'META_MMS';
+    }
+
+    // 0. OS Native TTS (Android TextToSpeech / Windows SAPI / OneCore)
+    if (effectiveEngine == 'OS_NATIVE') {
+      final spoke = await OsNativeTtsService.instance.speak(text, languageCode);
+      if (spoke) return;
+      debugPrint('[TTS] OS Native TTS spoke or fell back to ONNX model.');
+      effectiveEngine = 'META_MMS';
+    }
 
     final engineKey = effectiveEngine == 'AI4BHARAT_RASA'
         ? 'AI4BHARAT_RASA'
@@ -619,7 +672,10 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
   List<String> get loadedTtsKeys => List.unmodifiable(_ttsEngines.keys);
 
   @override
-  bool isTtsKeyLoaded(String key) => _ttsEngines.containsKey(key);
+  bool isTtsKeyLoaded(String key) {
+    if (key.toUpperCase().contains('OS_NATIVE')) return true;
+    return _ttsEngines.containsKey(key);
+  }
 
   @override
   void unloadTtsKey(String key) {

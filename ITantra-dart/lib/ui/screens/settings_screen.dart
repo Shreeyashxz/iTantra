@@ -244,6 +244,17 @@ class SettingsScreen extends StatelessWidget {
                       onDownload: () => settingsController.downloadIndicXlit(),
                       onDelete: () => settingsController.deleteIndicXlit(),
                     ),
+                    const SizedBox(height: 6),
+
+                    // AI4Bharat IndicLID-FastText Language Identification
+                    _ModelStatusRow(
+                      title: 'Language Identification (AI4Bharat IndicLID-FastText, ~14 MB)',
+                      modelKey: 'lid',
+                      isReady: settingsController.isLidReady,
+                      downloadState: settingsController.downloadState,
+                      onDownload: () => settingsController.downloadLid(),
+                      onDelete: () => settingsController.deleteLid(),
+                    ),
                     const Divider(height: 24),
 
                     Row(
@@ -414,10 +425,15 @@ class SettingsScreen extends StatelessWidget {
                               ],
                             ),
                           ),
-                          ButtonSegment(
+                          const ButtonSegment(
                             value: 'META_MMS',
-                            icon: const Icon(Icons.language_rounded),
-                            label: const Text('Meta MMS VITS'),
+                            icon: Icon(Icons.language_rounded),
+                            label: Text('Meta MMS VITS'),
+                          ),
+                          const ButtonSegment(
+                            value: 'OS_NATIVE',
+                            icon: Icon(Icons.phone_android_rounded),
+                            label: Text('OS Native'),
                           ),
                         ],
                         selected: {settings.ttsEngineType},
@@ -431,10 +447,39 @@ class SettingsScreen extends StatelessWidget {
                     const SizedBox(height: 6),
                     Text(
                       settings.ttsEngineType == 'AI4BHARAT_RASA'
-                          ? '🇮🇳 Sovereign Indian Stack: 1 single ~123MB pack covers all 13 Indian languages with native multi-speaker support.'
-                          : '🌐 Meta Massively Multilingual: Lightweight ~114MB single-language packs tailored per regional language.',
+                          ? '🇮🇳 Sovereign Indian Stack: 1 single ~123MB pack covers Indic languages with multi-speaker support.'
+                          : settings.ttsEngineType == 'OS_NATIVE'
+                              ? '📱 Platform Native Engine: Zero download size, zero RAM. Uses built-in Android TextToSpeech or Windows OneCore voices.'
+                              : '🌐 Meta Massively Multilingual: Lightweight single-language VITS packs tailored per regional language (covers all 10 SIH languages).',
                       style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                     ),
+                    if (settings.ttsEngineType == 'AI4BHARAT_RASA') ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.amber.withAlpha(25),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.amber.withAlpha(100)),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Icon(Icons.warning_amber_rounded, color: Colors.amber, size: 18),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Warning: AI4Bharat Rasa-13 does not support Gujarati (gu), Odia (or), or English (en). For these languages, iTantra automatically falls back to Meta MMS-TTS or OS Native.',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: Colors.amber.shade200,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 16),
 
                     Text(

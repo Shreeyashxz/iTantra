@@ -61,13 +61,22 @@ class TransceiverController extends ChangeNotifier {
   bool _isSttInitializing = false;
   bool get isSttInitializing => _isSttInitializing;
 
-  /// Active TTS engine type ('AI4BHARAT_RASA' or 'META_MMS')
+  /// Active TTS engine type ('AI4BHARAT_RASA', 'META_MMS', or 'OS_NATIVE')
   String _ttsEngineType = 'AI4BHARAT_RASA';
   String get ttsEngineType => _ttsEngineType;
   bool get isRasa => _ttsEngineType == 'AI4BHARAT_RASA';
+  bool get isOsNative => _ttsEngineType == 'OS_NATIVE';
+  bool get isRasaUnsupportedForSelectedLang =>
+      const {'gu', 'or', 'en'}.contains(_selectedLanguage.toLowerCase());
 
   Future<void> toggleTtsEngine() async {
-    _ttsEngineType = _ttsEngineType == 'AI4BHARAT_RASA' ? 'META_MMS' : 'AI4BHARAT_RASA';
+    if (_ttsEngineType == 'AI4BHARAT_RASA') {
+      _ttsEngineType = 'META_MMS';
+    } else if (_ttsEngineType == 'META_MMS') {
+      _ttsEngineType = 'OS_NATIVE';
+    } else {
+      _ttsEngineType = 'AI4BHARAT_RASA';
+    }
     notifyListeners();
     try {
       final settings = await database.getSettings();

@@ -533,13 +533,21 @@ class _TransceiverScreenState extends State<TransceiverScreen>
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                       decoration: BoxDecoration(
                         color: controller.isRasa
-                            ? const Color(0xFFE65100).withAlpha(35)
-                            : const Color(0xFF0288D1).withAlpha(35),
+                            ? (controller.isRasaUnsupportedForSelectedLang
+                                ? Colors.amber.withAlpha(45)
+                                : const Color(0xFFE65100).withAlpha(35))
+                            : controller.isOsNative
+                                ? const Color(0xFF4CAF50).withAlpha(35)
+                                : const Color(0xFF0288D1).withAlpha(35),
                         borderRadius: BorderRadius.circular(20),
                         border: Border.all(
                           color: controller.isRasa
-                              ? const Color(0xFFFF9800).withAlpha(160)
-                              : const Color(0xFF29B6F6).withAlpha(160),
+                              ? (controller.isRasaUnsupportedForSelectedLang
+                                  ? Colors.amber
+                                  : const Color(0xFFFF9800).withAlpha(160))
+                              : controller.isOsNative
+                                  ? const Color(0xFF81C784).withAlpha(160)
+                                  : const Color(0xFF29B6F6).withAlpha(160),
                           width: 1.0,
                         ),
                       ),
@@ -547,21 +555,41 @@ class _TransceiverScreenState extends State<TransceiverScreen>
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Icon(
-                            controller.isRasa ? Icons.hub_rounded : Icons.language_rounded,
+                            controller.isRasa
+                                ? (controller.isRasaUnsupportedForSelectedLang
+                                    ? Icons.warning_amber_rounded
+                                    : Icons.hub_rounded)
+                                : controller.isOsNative
+                                    ? Icons.phone_android_rounded
+                                    : Icons.language_rounded,
                             size: 14,
                             color: controller.isRasa
-                                ? const Color(0xFFFF9800)
-                                : const Color(0xFF29B6F6),
+                                ? (controller.isRasaUnsupportedForSelectedLang
+                                    ? Colors.amber
+                                    : const Color(0xFFFF9800))
+                                : controller.isOsNative
+                                    ? const Color(0xFF81C784)
+                                    : const Color(0xFF29B6F6),
                           ),
                           const SizedBox(width: 4),
                           Text(
-                            controller.isRasa ? 'TTS: RASA' : 'TTS: MMS',
+                            controller.isRasa
+                                ? (controller.isRasaUnsupportedForSelectedLang
+                                    ? 'RASA (⚠️ MMS Fallback)'
+                                    : 'TTS: RASA')
+                                : controller.isOsNative
+                                    ? 'TTS: OS'
+                                    : 'TTS: MMS',
                             style: TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.bold,
                               color: controller.isRasa
-                                  ? const Color(0xFFFF9800)
-                                  : const Color(0xFF29B6F6),
+                                  ? (controller.isRasaUnsupportedForSelectedLang
+                                      ? Colors.amber
+                                      : const Color(0xFFFF9800))
+                                  : controller.isOsNative
+                                      ? const Color(0xFF81C784)
+                                      : const Color(0xFF29B6F6),
                             ),
                           ),
                         ],
