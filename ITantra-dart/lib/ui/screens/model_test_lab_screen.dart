@@ -2943,6 +2943,7 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
                   items: const [
                     DropdownMenuItem(value: 'META_MMS', child: Text('Meta MMS VITS')),
                     DropdownMenuItem(value: 'AI4BHARAT_RASA', child: Text('AI4Bharat Rasa-13')),
+                    DropdownMenuItem(value: 'OS_NATIVE', child: Text('OS Native (System)')),
                   ],
                   onChanged: (val) {
                     if (val != null) {
@@ -2979,6 +2980,7 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
               _ensureTtsLoaded(l, _t4Engine);
             },
           ),
+          _buildRasaWarning(_t4Engine, _t4TargetLang),
           const SizedBox(height: 10),
           _buildMicMeter(isRecording: isRecording),
           const SizedBox(height: 10),
@@ -3052,6 +3054,7 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
                   items: const [
                     DropdownMenuItem(value: 'META_MMS', child: Text('Meta MMS VITS')),
                     DropdownMenuItem(value: 'AI4BHARAT_RASA', child: Text('AI4Bharat Rasa-13')),
+                    DropdownMenuItem(value: 'OS_NATIVE', child: Text('OS Native (System)')),
                   ],
                   onChanged: (val) {
                     if (val != null) {
@@ -3097,6 +3100,7 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
               _ensureTtsLoaded(l, _t5Engine);
             },
           ),
+          _buildRasaWarning(_t5Engine, _t5TargetLang),
           const SizedBox(height: 10),
           TextField(
             controller: _t5Controller,

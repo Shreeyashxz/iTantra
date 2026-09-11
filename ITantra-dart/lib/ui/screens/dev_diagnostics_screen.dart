@@ -1195,6 +1195,18 @@ class _DevDiagnosticsScreenState extends State<DevDiagnosticsScreen>
                             }
                           },
                         ),
+                        const SizedBox(width: 6),
+                        ChoiceChip(
+                          avatar: const Icon(Icons.volume_up_rounded, size: 14),
+                          label: const Text('OS Native', style: TextStyle(fontSize: 11)),
+                          selected: settingsController.ttsEngineType == 'OS_NATIVE',
+                          onSelected: (selected) async {
+                            if (selected) {
+                              await settingsController.updateTtsEngineType('OS_NATIVE');
+                              if (mounted) setState(() {});
+                            }
+                          },
+                        ),
                       ],
                     ),
                     const SizedBox(height: 10),
@@ -1257,6 +1269,34 @@ class _DevDiagnosticsScreenState extends State<DevDiagnosticsScreen>
                       ],
                     ),
                     const SizedBox(height: 12),
+
+                    if (settingsController.ttsEngineType == 'AI4BHARAT_RASA' &&
+                        const {'gu', 'or', 'en'}.contains(_selectedTtsLang))
+                      Container(
+                        margin: const EdgeInsets.only(bottom: 10),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.amber.withAlpha(30),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.amber.shade700, width: 1.2),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.warning_amber_rounded, size: 18, color: Colors.amber.shade700),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Rasa-13 lacks ${_selectedTtsLang.toUpperCase()} (Gujarati / Odia / English). The engine will automatically route synthesis to Meta MMS / OS Native fallback.',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.amber.shade800,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
 
                     // Quick Preset Chips
                     Wrap(
