@@ -469,7 +469,7 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
 
     // 0. OS Native TTS (Android TextToSpeech / Windows SAPI / OneCore)
     if (effectiveEngine == 'OS_NATIVE') {
-      final spoke = await OsNativeTtsService.instance.speak(text, languageCode);
+      final spoke = await OsNativeTtsService.instance.speak(text, languageCode, gender);
       if (spoke) return;
       debugPrint('[TTS] OS Native TTS spoke or fell back to ONNX model.');
       effectiveEngine = 'META_MMS';
@@ -494,9 +494,20 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
       }
 
       if (ready && tts != null) {
-        // Clean 1.0x native model synthesis (no pitch warping or male/female distortion)
-        const speakerId = 0;
-        const speed = 1.0;
+        final isMale = gender.toUpperCase() == 'MALE';
+        final isRasa = effectiveEngine == 'AI4BHARAT_RASA';
+
+        // Speaker ID routing:
+        // - AI4Bharat Rasa-13 is multi-speaker (sid: 0 = Female, sid: 1 = Male)
+        // - Meta MMS is strictly single-speaker (sid MUST be locked to 0)
+        final speakerId = isRasa ? (isMale ? 1 : 0) : 0;
+
+        // Cadence tuned for tactical communication (per rules.md):
+        // - Rasa-13: 0.92 for baritone male, 1.02 for soprano female
+        // - MMS: 0.95 for male, 1.02 for female
+        final speed = isRasa
+            ? (isMale ? 0.92 : 1.02)
+            : (isMale ? 0.95 : 1.02);
 
         final normalizedText = ScriptNormalizationEngine.prepareTextForTts(
           text,
@@ -506,8 +517,16 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
 
         final audio = tts.generate(text: normalizedText, sid: speakerId, speed: speed);
         if (audio.samples.isNotEmpty) {
-          debugPrint('[TTS] Synthesized ${audio.samples.length} samples at ${audio.sampleRate}Hz via $effectiveEngine for $languageCode');
-          await _playGeneratedAudio(audio.samples, audio.sampleRate);
+          debugPrint(
+            '[TTS] Synthesized ${audio.samples.length} samples at ${audio.sampleRate}Hz '
+            'via $effectiveEngine for $languageCode (gender: $gender, sid: $speakerId, speed: $speed)',
+          );
+          await _playGeneratedAudio(
+            audio.samples,
+            audio.sampleRate,
+            isMale: isMale,
+            isRasa: isRasa,
+          );
           return;
         } else {
           debugPrint('[TTS] VITS generator returned empty samples for text: "$text"');
@@ -525,7 +544,12 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
   }
 
   /// Writes the generated Float32 samples to a WAV file and plays it via AudioPlayer.
-  Future<void> _playGeneratedAudio(Float32List samples, int sampleRate) async {
+  Future<void> _playGeneratedAudio(
+    Float32List samples,
+    int sampleRate, {
+    bool isMale = false,
+    bool isRasa = false,
+  }) async {
     final tempDir = await getApplicationSupportDirectory();
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     final wavPath = p.join(tempDir.path, 'tts_output_$timestamp.wav');
@@ -544,7 +568,14 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
       int16Samples[i] = (int16Samples[i] * factor).toInt();
     }
 
-    final wavData = _buildWav(int16Samples, sampleRate, 1);
+    // Gender physical formant adjustment for single-speaker MMS (rules.md Section 4.2):
+    // Rasa-13 already synthesizes the true neural male voice via sid: 1, so no sample rate scaling is needed.
+    // For single-speaker Meta MMS, scale sample rate subtly by 0.91 (Male baritone) or 1.04 (Female soprano).
+    final int effectiveSampleRate = isRasa
+        ? sampleRate
+        : (isMale ? (sampleRate * 0.91).round() : (sampleRate * 1.04).round());
+
+    final wavData = _buildWav(int16Samples, effectiveSampleRate, 1);
     final wavFile = File(wavPath);
     await wavFile.writeAsBytes(wavData, flush: true);
 
@@ -553,7 +584,7 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
       await _audioPlayer.setVolume(1.0);
       await _audioPlayer.setPlaybackRate(1.0);
       await _audioPlayer.play(DeviceFileSource(wavPath));
-      debugPrint('[TTS] AudioPlayer playback active for: $wavPath');
+      debugPrint('[TTS] AudioPlayer playback active for: $wavPath (sampleRate: ${effectiveSampleRate}Hz)');
     } catch (e) {
       debugPrint('[TTS] AudioPlayer error: $e');
     }

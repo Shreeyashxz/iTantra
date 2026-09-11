@@ -43,7 +43,7 @@ class OsNativeTtsService {
   }
 
   /// Speaks the given text in the requested language using the OS native TTS voice.
-  Future<bool> speak(String text, String languageCode) async {
+  Future<bool> speak(String text, String languageCode, [String gender = 'FEMALE']) async {
     final clean = text.trim();
     if (clean.isEmpty) return false;
 
@@ -54,10 +54,14 @@ class OsNativeTtsService {
       final locale = bcp47Codes[languageCode.toLowerCase()] ?? 'en-IN';
       await _flutterTts?.setLanguage(locale);
 
+      final isMale = gender.toUpperCase() == 'MALE';
+      await _flutterTts?.setPitch(isMale ? 0.85 : 1.15);
+      await _flutterTts?.setSpeechRate(isMale ? 0.48 : 0.50);
+
       final result = await _flutterTts?.speak(clean);
       final ok = result == 1;
       if (ok) {
-        debugPrint('[OsNativeTTS] Spoke "$clean" via OS native engine ($locale)');
+        debugPrint('[OsNativeTTS] Spoke "$clean" via OS native engine ($locale, gender: $gender)');
       }
       return ok;
     } catch (e) {
