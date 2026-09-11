@@ -91,18 +91,10 @@ class CommPipeline {
     });
 
     _sttSubscription?.cancel();
-    _sttSubscription = textStream.listen((text) async {
+    _sttSubscription = textStream.listen((text) {
       if (text.trim().isNotEmpty) {
         final normalizedText = ScriptNormalizationEngine.normalizeFromStt(text, languageCode);
         _onTranscriptCallback?.call(normalizedText);
-        final packet = TransceiverPacket(
-          senderId: senderId,
-          languageCode: languageCode,
-          transcript: normalizedText,
-          timestampMs: DateTime.now().millisecondsSinceEpoch,
-          type: PacketType.voice,
-        );
-        await transceiverManager.sendPacket(packet);
       }
     });
   }

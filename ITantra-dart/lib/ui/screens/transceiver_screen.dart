@@ -203,6 +203,51 @@ class _TransceiverScreenState extends State<TransceiverScreen>
               ),
             ),
           ),
+          // TTS Engine Quick-Switch (AI4Bharat Rasa-13 ↔ Meta MMS)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+            child: InkWell(
+              onTap: () => controller.toggleTtsEngine(),
+              borderRadius: BorderRadius.circular(16),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: controller.isRasa
+                      ? const Color(0xFFE65100).withAlpha(35)
+                      : const Color(0xFF0288D1).withAlpha(35),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: controller.isRasa
+                        ? const Color(0xFFFF9800)
+                        : const Color(0xFF29B6F6),
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      controller.isRasa ? Icons.hub_rounded : Icons.language_rounded,
+                      size: 14,
+                      color: controller.isRasa
+                          ? const Color(0xFFFF9800)
+                          : const Color(0xFF29B6F6),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      controller.isRasa ? 'TTS: RASA' : 'TTS: MMS',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: controller.isRasa
+                            ? const Color(0xFFFF9800)
+                            : const Color(0xFF29B6F6),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
           // VAD (Voice Activity Detection) Hands-Free Quick Toggle
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),

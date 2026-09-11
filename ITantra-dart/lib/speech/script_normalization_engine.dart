@@ -568,6 +568,12 @@ class ScriptNormalizationEngine {
       return expected == ScriptType.devanagari ? deva : fromDevanagariToIndic(deva, expected);
     }
 
+    // If text is in another Indic script, align it to the expected script
+    if (detected != expected && detected != ScriptType.unknown) {
+      final deva = toDevanagari(clean);
+      return expected == ScriptType.devanagari ? deva : fromDevanagariToIndic(deva, expected);
+    }
+
     return clean;
   }
 

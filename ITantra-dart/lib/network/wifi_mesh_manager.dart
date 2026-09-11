@@ -289,25 +289,35 @@ class WifiMeshManager {
     final bytes = utf8.encode(payload);
 
     try {
-      _broadcastSocket ??= await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0, reuseAddress: true);
-      _broadcastSocket!.broadcastEnabled = true;
+      if (_broadcastSocket == null) {
+        _broadcastSocket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0, reuseAddress: true);
+        _broadcastSocket!.broadcastEnabled = true;
+      }
 
       // 1. Universal broadcast
-      _broadcastSocket!.send(bytes, InternetAddress('255.255.255.255'), beaconPort);
+      try {
+        _broadcastSocket?.send(bytes, InternetAddress('255.255.255.255'), beaconPort);
+      } catch (e) {
+        // Universal 255.255.255.255 can throw OS error 1231 on Windows if route table is missing a gateway
+      }
 
       // 2. Multicast group
       try {
-        _broadcastSocket!.send(bytes, multicastAddress, beaconPort);
+        _broadcastSocket?.send(bytes, multicastAddress, beaconPort);
       } catch (_) {}
 
       // 3. Directed subnet broadcasts for each active non-APIPA interface
       for (final iface in _activeInterfaces.where((i) => !i.isApipa)) {
         try {
-          _broadcastSocket!.send(bytes, InternetAddress(iface.broadcastAddress), beaconPort);
+          _broadcastSocket?.send(bytes, InternetAddress(iface.broadcastAddress), beaconPort);
         } catch (_) {}
       }
     } catch (e) {
       debugPrint('Beacon transmit error: $e');
+      try {
+        _broadcastSocket?.close();
+      } catch (_) {}
+      _broadcastSocket = null;
     }
   }
 
@@ -324,10 +334,19 @@ class WifiMeshManager {
         final announcedIp = parts[2];
         final port = int.tryParse(parts[3]) ?? transceiverManager.activePort;
 
-        // Resolve real IP: if announced IP is 0.0.0.0, use the socket remote address
-        final peerIp = (announcedIp.isNotEmpty && announcedIp != '0.0.0.0')
-            ? announcedIp
-            : dg.address.address;
+        // Resolve real IP: if announced IP is missing, loopback, APIPA, or off-subnet, use the datagram link address
+        String peerIp = dg.address.address;
+        if (announcedIp.isNotEmpty &&
+            announcedIp != '0.0.0.0' &&
+            announcedIp != '127.0.0.1' &&
+            !announcedIp.startsWith('169.254.')) {
+          final matchesSubnet = _activeInterfaces.any(
+            (iface) => !iface.isApipa && announcedIp.startsWith('${iface.subnetPrefix}.'),
+          );
+          if (matchesSubnet) {
+            peerIp = announcedIp;
+          }
+        }
 
         // Ignore our own broadcast
         if (peerId == nodeId) return;
@@ -373,20 +392,48 @@ class WifiMeshManager {
     }
   }
 
+  /// Converts an IPv4 dotted string into a 32-bit unsigned integer for deterministic comparison
+  static int ipToUint32(String ip) {
+    try {
+      final parts = ip.split('.');
+      if (parts.length == 4) {
+        return ((int.parse(parts[0]) & 0xFF) << 24) |
+            ((int.parse(parts[1]) & 0xFF) << 16) |
+            ((int.parse(parts[2]) & 0xFF) << 8) |
+            (int.parse(parts[3]) & 0xFF);
+      }
+    } catch (_) {}
+    return 0;
+  }
+
   void _autoConnectToPeer(String peerIp, int port) {
-    // Hybrid Hotspot Rule: If this device is a Hotspot Client, proactively link to the Hotspot Host (.1)
-    if (isHotspotClient && peerIp == hotspotHostIp) {
+    // 1. Hotspot AP Host Rule: If this device is hosting the AP (.1), let the Hotspot Client initiate
+    if (isHotspotHost) {
+      debugPrint('[Hybrid Discovery] Hotspot Host standing by for client link from $peerIp:$port');
+      return;
+    }
+
+    // 2. Hotspot Client Rule: Proactively link to the Hotspot Host (.1)
+    if (isHotspotClient && (peerIp == hotspotHostIp || peerIp.endsWith('.1'))) {
       debugPrint('[Hybrid Discovery] Auto-linking client to Hotspot Host at $peerIp:$port...');
       transceiverManager.connectToPeer(peerIp, targetPort: port);
       return;
     }
 
-    // Symmetrical tie-breaker for general peer mesh: device with smaller IP initiates outbound TCP link
+    // 3. Symmetrical 32-bit numeric IP tie-breaker for general peer mesh:
+    // Device with smaller numeric IP initiates outbound TCP link
     final myIp = primaryIp ?? '';
-    if (myIp.isNotEmpty && myIp.compareTo(peerIp) < 0) {
-      debugPrint('Auto-linking mesh to $peerIp:$port (tie-breaker: initiator)...');
-      transceiverManager.connectToPeer(peerIp, targetPort: port);
-    } else if (myIp.isEmpty) {
+    final myNumeric = ipToUint32(myIp);
+    final peerNumeric = ipToUint32(peerIp);
+
+    if (myNumeric != 0 && peerNumeric != 0) {
+      if (myNumeric < peerNumeric) {
+        debugPrint('Auto-linking mesh to $peerIp:$port (tie-breaker: initiator $myNumeric < $peerNumeric)...');
+        transceiverManager.connectToPeer(peerIp, targetPort: port);
+      } else {
+        debugPrint('Mesh peer discovered: $peerIp:$port (tie-breaker: awaiting inbound connection)');
+      }
+    } else {
       transceiverManager.connectToPeer(peerIp, targetPort: port);
     }
   }

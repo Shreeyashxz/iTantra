@@ -46,8 +46,10 @@ class TransceiverManager {
   final BleFallbackTransport bleTransport = BleFallbackTransport();
   StreamSubscription<TransceiverPacket>? _bleSubscription;
 
-  final _incomingPacketsController = StreamController<TransceiverPacket>.broadcast();
-  Stream<TransceiverPacket> get incomingPackets => _incomingPacketsController.stream;
+  final _incomingPacketsController =
+      StreamController<TransceiverPacket>.broadcast();
+  Stream<TransceiverPacket> get incomingPackets =>
+      _incomingPacketsController.stream;
 
   final _connectionStateController = StreamController<String>.broadcast();
   Stream<String> get connectionState => _connectionStateController.stream;
@@ -71,7 +73,8 @@ class TransceiverManager {
   int? get averageRttMs {
     final active = _peerStats.values.where((s) => s.rttMs > 0);
     if (active.isEmpty) return null;
-    return (active.map((s) => s.rttMs).reduce((a, b) => a + b) / active.length).round();
+    return (active.map((s) => s.rttMs).reduce((a, b) => a + b) / active.length)
+        .round();
   }
 
   int totalPacketsSent = 0;
@@ -112,7 +115,11 @@ class TransceiverManager {
 
     for (final tryPort in portsToTry) {
       try {
-        _serverSocket = await ServerSocket.bind(InternetAddress.anyIPv4, tryPort, shared: true);
+        _serverSocket = await ServerSocket.bind(
+          InternetAddress.anyIPv4,
+          tryPort,
+          shared: true,
+        );
         _activePort = tryPort;
         _isRunning = true;
         _lastError = null;
@@ -122,7 +129,9 @@ class TransceiverManager {
         _serverSocket!.listen(
           (socket) {
             final remoteIp = socket.remoteAddress.address;
-            debugPrint('Inbound connection received from $remoteIp:${socket.remotePort}');
+            debugPrint(
+              'Inbound connection received from $remoteIp:${socket.remotePort}',
+            );
             _attachSocket(socket, remoteIp);
           },
           onError: (error) {
@@ -172,7 +181,8 @@ class TransceiverManager {
         'success': true,
         'port': target,
         'latencyMs': sw.elapsedMilliseconds,
-        'message': 'Port $target is OPEN and ready for transceiver traffic (~${sw.elapsedMilliseconds} ms)',
+        'message':
+            'Port $target is OPEN and ready for transceiver traffic (~${sw.elapsedMilliseconds} ms)',
       };
     } catch (e) {
       sw.stop();
@@ -185,6 +195,8 @@ class TransceiverManager {
     }
   }
 
+  final Set<String> _connectingPeers = {};
+
   Future<bool> connectToPeer(String ipAddress, {int? targetPort}) async {
     final destPort = targetPort ?? _activePort;
 
@@ -194,12 +206,13 @@ class TransceiverManager {
       return testRes['success'] as bool;
     }
 
-    // Check if already connected
-    if (_peerSockets.containsKey(ipAddress)) {
+    // Check if already connected or connection already in progress
+    if (_peerSockets.containsKey(ipAddress) || _connectingPeers.contains(ipAddress)) {
       _updateConnectionState();
       return true;
     }
 
+    _connectingPeers.add(ipAddress);
     try {
       final socket = await Socket.connect(
         ipAddress,
@@ -212,6 +225,8 @@ class TransceiverManager {
     } catch (e) {
       debugPrint('Failed connecting to peer at $ipAddress:$destPort: $e');
       return false;
+    } finally {
+      _connectingPeers.remove(ipAddress);
     }
   }
 
@@ -223,7 +238,13 @@ class TransceiverManager {
     // Close any previous socket for this IP
     final existing = _peerSockets[ipAddress];
     if (existing != null && existing != socket) {
-      existing.destroy();
+      debugPrint(
+        '[Transceiver] Replacing existing socket for $ipAddress with new link',
+      );
+      _peerSockets.remove(ipAddress);
+      try {
+        existing.destroy();
+      } catch (_) {}
     }
 
     _peerSockets[ipAddress] = socket;
@@ -259,8 +280,10 @@ class TransceiverManager {
             // Handle ping packet for RTT measurement
             if (packet.transcript == '__ITANTRA_PING__') {
               _sendAck(socket, packet.timestampMs);
-            } else if (packet.type == PacketType.ack && packet.transcript.startsWith('PONG:')) {
-              final sentTime = int.tryParse(packet.transcript.substring(5)) ?? 0;
+            } else if (packet.type == PacketType.ack &&
+                packet.transcript.startsWith('PONG:')) {
+              final sentTime =
+                  int.tryParse(packet.transcript.substring(5)) ?? 0;
               if (sentTime > 0 && stats != null) {
                 stats.rttMs = DateTime.now().millisecondsSinceEpoch - sentTime;
                 _statsController.add(activePeerStats);
@@ -282,20 +305,29 @@ class TransceiverManager {
       },
       onError: (e) {
         debugPrint('Socket error on $ipAddress: $e');
-        _detachSocket(ipAddress);
+        _detachSocket(ipAddress, socket);
       },
       onDone: () {
         debugPrint('Socket disconnected from $ipAddress');
-        _detachSocket(ipAddress);
+        _detachSocket(ipAddress, socket);
       },
       cancelOnError: true,
     );
   }
 
-  void _detachSocket(String ipAddress) {
+  void _detachSocket(String ipAddress, [Socket? closedSocket]) {
+    final current = _peerSockets[ipAddress];
+    if (closedSocket != null && current != null && current != closedSocket) {
+      debugPrint(
+        '[Transceiver] Ignoring detachment for superseded socket on $ipAddress',
+      );
+      return;
+    }
     final socket = _peerSockets.remove(ipAddress);
     _peerStats.remove(ipAddress);
-    socket?.destroy();
+    try {
+      socket?.destroy();
+    } catch (_) {}
     _updateConnectionState();
   }
 
@@ -318,7 +350,9 @@ class TransceiverManager {
   Future<void> sendPacket(TransceiverPacket packet) async {
     if (_peerSockets.isEmpty) {
       if (bleTransport.isConnected) {
-        debugPrint('[Transceiver] Wi-Fi peers unavailable. Routing via BLE fallback transport...');
+        debugPrint(
+          '[Transceiver] Wi-Fi peers unavailable. Routing via BLE fallback transport...',
+        );
         totalPacketsSent++;
         await bleTransport.sendPacket(packet);
         return;
@@ -393,4 +427,3 @@ class TransceiverManager {
     _statsController.close();
   }
 }
-

@@ -91,7 +91,7 @@ class AlertReceiver {
             audioFocus: AndroidAudioFocus.gainTransientExclusive,
           ),
           iOS: AudioContextIOS(
-            category: AVAudioSessionCategory.playback,
+            category: AVAudioSessionCategory.playAndRecord,
             options: {
               AVAudioSessionOptions.duckOthers,
               AVAudioSessionOptions.defaultToSpeaker,

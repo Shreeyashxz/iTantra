@@ -82,5 +82,15 @@ void main() {
       expect(res.contains('8'), isFalse);
       expect(res.contains('!'), isFalse);
     });
+
+    test('TTS Normalizer aligns cross-script Indic text for Rasa-13 when detected != expected', () {
+      // Devanagari text fed to Tamil target should align to Tamil script
+      final devaInput = 'नमस्ते';
+      final res = ScriptNormalizationEngine.prepareTextForTts(devaInput, 'ta', 'AI4BHARAT_RASA');
+      expect(res, isNotEmpty);
+      // Verify the script is not Latin and was processed
+      final script = ScriptNormalizationEngine.detectScript(res);
+      expect(script, equals(ScriptType.tamil));
+    });
   });
 }

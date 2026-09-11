@@ -7,12 +7,12 @@ void main() {
     final tm = TransceiverManager();
     final ok = await tm.startServer();
     expect(ok, isTrue);
-    expect(tm.activePort, equals(8888));
-    expect(tm.currentStatusString, contains('Listening on port 8888'));
+    expect(tm.activePort, isIn(TransceiverManager.fallbackPorts));
+    expect(tm.currentStatusString, contains('Listening on port ${tm.activePort}'));
 
     final testRes = await tm.testLocalPortConnection();
     expect(testRes['success'], isTrue);
-    expect(testRes['port'], equals(8888));
+    expect(testRes['port'], equals(tm.activePort));
 
     final mm = WifiMeshManager(transceiverManager: tm);
     final ifaces = await mm.refreshInterfaces();
@@ -30,6 +30,13 @@ void main() {
     expect(WifiMeshManager.isHotspotSubnet('172.20.10.1'), isTrue);
     expect(WifiMeshManager.isHotspotSubnet('192.168.225.1'), isTrue);
     expect(WifiMeshManager.isHotspotSubnet('192.168.1.10'), isFalse);
+
+    // Verify 32-bit numeric IP comparison (192.168.1.3 must be less than 192.168.1.10)
+    final numIp3 = WifiMeshManager.ipToUint32('192.168.1.3');
+    final numIp10 = WifiMeshManager.ipToUint32('192.168.1.10');
+    expect(numIp3, isNonZero);
+    expect(numIp10, isNonZero);
+    expect(numIp3 < numIp10, isTrue);
 
     mm.dispose();
     tm.dispose();

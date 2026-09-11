@@ -117,6 +117,7 @@ void main() async {
     MultiProvider(
       providers: [
         ChangeNotifierProvider(
+          lazy: false,
           create: (_) => TransceiverController(
             commPipeline: commPipeline,
             transceiverManager: transceiverManager,
@@ -135,6 +136,7 @@ void main() async {
           ),
         ),
         ChangeNotifierProvider(
+          lazy: false,
           create: (_) => PeerController(
             meshManager: meshManager,
             transceiverManager: transceiverManager,

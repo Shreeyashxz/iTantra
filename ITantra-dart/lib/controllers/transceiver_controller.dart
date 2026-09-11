@@ -61,6 +61,23 @@ class TransceiverController extends ChangeNotifier {
   bool _isSttInitializing = false;
   bool get isSttInitializing => _isSttInitializing;
 
+  /// Active TTS engine type ('AI4BHARAT_RASA' or 'META_MMS')
+  String _ttsEngineType = 'AI4BHARAT_RASA';
+  String get ttsEngineType => _ttsEngineType;
+  bool get isRasa => _ttsEngineType == 'AI4BHARAT_RASA';
+
+  Future<void> toggleTtsEngine() async {
+    _ttsEngineType = _ttsEngineType == 'AI4BHARAT_RASA' ? 'META_MMS' : 'AI4BHARAT_RASA';
+    notifyListeners();
+    try {
+      final settings = await database.getSettings();
+      await database.saveSettings(settings.copyWith(ttsEngineType: _ttsEngineType));
+      unawaited(speechEngine.initTts(_selectedLanguage, _ttsEngineType));
+      debugPrint('[TransceiverController] TTS Engine switched to: $_ttsEngineType');
+    } catch (e) {
+      debugPrint('[TransceiverController] Error saving TTS engine switch: $e');
+    }
+  }
 
   StreamSubscription<TransceiverPacket>? _packetSubscription;
   StreamSubscription<AlertEvent?>? _alertSubscription;
@@ -83,13 +100,24 @@ class TransceiverController extends ChangeNotifier {
   }
 
   Future<void> _init() async {
-    // Load settings including MT preference
+    // Load settings including MT preference and TTS engine type
     final initialSettings = await database.getSettings();
     _isMtEnabled = initialSettings.isMtEnabled;
+    _ttsEngineType = initialSettings.ttsEngineType;
 
     // Load initial message history
     _messages = await database.getAllMessages();
     notifyListeners();
+
+    // ── Start Wi-Fi Mesh presence beaconing automatically on startup ──
+    try {
+      debugPrint('[TransceiverController] Auto-starting mesh beacon service on startup...');
+      unawaited(meshManager.startBeaconService(
+        customNodeName: 'iTantra Node ($deviceId)',
+      ));
+    } catch (e) {
+      debugPrint('[TransceiverController] Beacon service start notice: $e');
+    }
 
     // ── Auto-initialize STT engine so PTT works immediately ──
     _isSttInitializing = true;
@@ -122,8 +150,15 @@ class TransceiverController extends ChangeNotifier {
         if (settings.autoPlayAudio) {
           String textToSpeak = packet.transcript;
 
-          // B2: Overlapped MT Translation + TTS Pre-warming (only if MT enabled and languages differ)
-          final ttsWarmUp = speechEngine.initTts(_selectedLanguage, settings.ttsEngineType);
+          // Determine playback language:
+          // If MT is enabled and languages differ -> translate to receiver's selected language
+          // If MT is disabled -> output voice in the sender's original language (packet.languageCode)
+          final String speechLang = (_isMtEnabled && packet.languageCode != _selectedLanguage)
+              ? _selectedLanguage
+              : packet.languageCode;
+
+          final effectiveEngine = _ttsEngineType;
+          final ttsWarmUp = speechEngine.initTts(speechLang, effectiveEngine);
 
           if (_isMtEnabled && packet.languageCode != _selectedLanguage) {
             try {
@@ -146,15 +181,15 @@ class TransceiverController extends ChangeNotifier {
 
           textToSpeak = ScriptNormalizationEngine.prepareTextForTts(
             textToSpeak,
-            _selectedLanguage,
-            settings.ttsEngineType,
+            speechLang,
+            effectiveEngine,
           );
 
           await speechEngine.synthesizeSpeech(
             textToSpeak,
-            _selectedLanguage,
+            speechLang,
             settings.ttsGender,
-            settings.ttsEngineType,
+            effectiveEngine,
           );
         }
       }
@@ -163,7 +198,7 @@ class TransceiverController extends ChangeNotifier {
     // B1: Warm-up active language TTS engine in background after initialization
     unawaited(
       database.getSettings().then((settings) {
-        speechEngine.initTts(_selectedLanguage, settings.ttsEngineType);
+        speechEngine.initTts(_selectedLanguage, _ttsEngineType);
       }).catchError((e) {
         debugPrint('[TransceiverController] Startup warm-up ignored: $e');
       }),
