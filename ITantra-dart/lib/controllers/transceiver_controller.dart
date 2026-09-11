@@ -50,6 +50,17 @@ class TransceiverController extends ChangeNotifier {
 
   int? get linkRttMs => transceiverManager.averageRttMs;
 
+  /// Whether the STT engine is loaded and ready for PTT
+  bool get isSttReady => speechEngine.isSttLoaded;
+
+  /// Last PTT error message (null when no error)
+  String? _pttError;
+  String? get pttError => _pttError;
+
+  /// Whether STT is currently being initialized
+  bool _isSttInitializing = false;
+  bool get isSttInitializing => _isSttInitializing;
+
 
   StreamSubscription<TransceiverPacket>? _packetSubscription;
   StreamSubscription<AlertEvent?>? _alertSubscription;
@@ -78,6 +89,18 @@ class TransceiverController extends ChangeNotifier {
 
     // Load initial message history
     _messages = await database.getAllMessages();
+    notifyListeners();
+
+    // ── Auto-initialize STT engine so PTT works immediately ──
+    _isSttInitializing = true;
+    notifyListeners();
+    try {
+      final sttOk = await speechEngine.initStt();
+      debugPrint('[TransceiverController] STT auto-init: ${sttOk ? "SUCCESS" : "FAILED (models not downloaded?)"}');
+    } catch (e) {
+      debugPrint('[TransceiverController] STT auto-init error: $e');
+    }
+    _isSttInitializing = false;
     notifyListeners();
 
     // Listen for incoming packets
@@ -170,33 +193,90 @@ class TransceiverController extends ChangeNotifier {
     });
   }
 
-  void onPttPressed() {
+  /// Handles PTT button press — ensures STT is loaded before starting mic+pipeline
+  Future<void> onPttPressed() async {
     if (_isVadMode) return; // In VAD auto-mode, PTT is automatic
-    if (!_isTransmitting) {
-      _isTransmitting = true;
+    if (_isTransmitting) return;
+
+    // Clear any previous error
+    _pttError = null;
+
+    // Guard: ensure STT model is loaded
+    if (!speechEngine.isSttLoaded) {
+      debugPrint('[PTT] STT not loaded — attempting on-the-fly init...');
+      _isSttInitializing = true;
       notifyListeners();
-      commPipeline.startTransmission(
-        senderId: deviceId,
-        languageCode: _selectedLanguage,
-        onTranscript: (text) {
-          // Live preview or partial transcripts
-        },
-        onVoiceDetected: (isDetected) {
-          _isVoiceDetected = isDetected;
+      try {
+        final ok = await speechEngine.initStt();
+        _isSttInitializing = false;
+        if (!ok) {
+          _pttError = 'STT model not loaded. Download from Settings → Language Packs.';
           notifyListeners();
-        },
+          debugPrint('[PTT] BLOCKED: STT init failed — models not downloaded');
+          return;
+        }
+      } catch (e) {
+        _isSttInitializing = false;
+        _pttError = 'STT initialization error: $e';
+        notifyListeners();
+        return;
+      }
+    }
+
+    _isTransmitting = true;
+    notifyListeners();
+    debugPrint('[PTT] ▶ Recording started (lang=$_selectedLanguage, stt=${speechEngine.loadedSttVariant})');
+
+    await commPipeline.startTransmission(
+      senderId: deviceId,
+      languageCode: _selectedLanguage,
+      onTranscript: (text) async {
+        // Save live/partial transcripts to message history
+        if (text.trim().isNotEmpty) {
+          debugPrint('[PTT] Live transcript: "$text"');
+        }
+      },
+      onVoiceDetected: (isDetected) {
+        _isVoiceDetected = isDetected;
+        notifyListeners();
+      },
+    );
+  }
+
+  /// Handles PTT button release — stops recording, transcribes, sends packet, saves to DB
+  Future<void> onPttReleased() async {
+    if (_isVadMode) return;
+    if (!_isTransmitting) return;
+
+    _isTransmitting = false;
+    _isVoiceDetected = false;
+    notifyListeners();
+    debugPrint('[PTT] ■ Recording stopped — finalizing STT...');
+
+    final transcript = await commPipeline.stopTransmissionAndGetTranscript();
+
+    if (transcript.isNotEmpty) {
+      debugPrint('[PTT] Final transcript: "$transcript" — saving to DB');
+      final entity = MessageEntity(
+        senderId: deviceId,
+        text: transcript,
+        languageCode: _selectedLanguage,
+        type: 'VOICE',
+        timestamp: DateTime.now().millisecondsSinceEpoch,
+        isIncoming: false,
       );
+      await database.insertMessage(entity);
+      _messages = await database.getAllMessages();
+      notifyListeners();
+    } else {
+      debugPrint('[PTT] No speech detected — nothing sent');
     }
   }
 
-  void onPttReleased() {
-    if (_isVadMode) return;
-    if (_isTransmitting) {
-      _isTransmitting = false;
-      _isVoiceDetected = false;
-      notifyListeners();
-      commPipeline.stopTransmission();
-    }
+  /// Clears the PTT error state (called by UI after displaying)
+  void clearPttError() {
+    _pttError = null;
+    notifyListeners();
   }
 
   /// Toggles between PTT (Push-To-Talk) and VAD (Hands-Free Voice Activity Detection) mode

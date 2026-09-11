@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import '../network/transceiver_manager.dart';
 import '../proto/transceiver_packet.dart';
 import 'audio_recorder_service.dart';
@@ -45,6 +46,16 @@ class CommPipeline {
     void Function(String partialText)? onTranscript,
     void Function(bool isVoiceDetected)? onVoiceDetected,
   }) async {
+    // Guard: ensure STT model is initialized before starting mic
+    if (!speechEngine.isSttLoaded) {
+      debugPrint('[CommPipeline] STT not loaded — attempting auto-init before transmission...');
+      final ok = await speechEngine.initStt();
+      if (!ok) {
+        debugPrint('[CommPipeline] ABORT: Cannot start transmission without STT model');
+        return;
+      }
+    }
+
     _isTransmitting = true;
     _currentSenderId = senderId;
     _currentLanguageCode = languageCode;
@@ -114,7 +125,8 @@ class CommPipeline {
     await transceiverManager.sendPacket(packet);
   }
 
-  Future<void> stopTransmission() async {
+  /// Stops transmission and returns the final transcript (for the controller to save to DB).
+  Future<String> stopTransmissionAndGetTranscript() async {
     _isTransmitting = false;
     _isVoiceDetected = false;
     _onVoiceDetectedCallback?.call(false);
@@ -128,13 +140,14 @@ class CommPipeline {
 
     // Transcribe final buffer using IndicConformer
     final transcript = await speechEngine.stopListeningAndTranscribe();
+    String normalizedTranscript = '';
     if (transcript.isNotEmpty && _currentSenderId != null && _currentLanguageCode != null) {
-      final normalized = ScriptNormalizationEngine.normalizeFromStt(transcript, _currentLanguageCode!);
-      _onTranscriptCallback?.call(normalized);
+      normalizedTranscript = ScriptNormalizationEngine.normalizeFromStt(transcript, _currentLanguageCode!);
+      _onTranscriptCallback?.call(normalizedTranscript);
       final packet = TransceiverPacket(
         senderId: _currentSenderId!,
         languageCode: _currentLanguageCode!,
-        transcript: normalized,
+        transcript: normalizedTranscript,
         timestampMs: DateTime.now().millisecondsSinceEpoch,
         type: PacketType.voice,
       );
@@ -146,6 +159,13 @@ class CommPipeline {
     _currentSenderId = null;
     _currentLanguageCode = null;
     _onTranscriptCallback = null;
+
+    return normalizedTranscript;
+  }
+
+  /// Legacy stopTransmission() — delegates to stopTransmissionAndGetTranscript()
+  Future<void> stopTransmission() async {
+    await stopTransmissionAndGetTranscript();
   }
 
   /// Starts Hands-Free VAD Auto-Mode:

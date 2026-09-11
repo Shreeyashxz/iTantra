@@ -93,6 +93,33 @@ class _TransceiverScreenState extends State<TransceiverScreen>
 
     final isConnected = controller.connectionStatus.contains('Connected');
 
+    // Show PTT error as SnackBar if present
+    if (controller.pttError != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && controller.pttError != null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              duration: const Duration(seconds: 4),
+              backgroundColor: const Color(0xFF7F1D1D),
+              content: Row(
+                children: [
+                  const Icon(Icons.error_outline_rounded, color: Colors.redAccent, size: 20),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      controller.pttError!,
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+          controller.clearPttError();
+        }
+      });
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: Column(
@@ -382,6 +409,41 @@ class _TransceiverScreenState extends State<TransceiverScreen>
             ),
           ),
           const Divider(height: 1),
+
+          // STT Engine Readiness Indicator
+          if (!controller.isSttReady)
+            Container(
+              width: double.infinity,
+              color: controller.isSttInitializing
+                  ? Colors.amber.withAlpha(25)
+                  : theme.colorScheme.errorContainer.withAlpha(80),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              child: Row(
+                children: [
+                  if (controller.isSttInitializing)
+                    const SizedBox(
+                      width: 14, height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.amber),
+                    )
+                  else
+                    Icon(Icons.mic_off_rounded, size: 16, color: theme.colorScheme.error),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      controller.isSttInitializing
+                          ? 'Loading STT engine (IndicConformer)...'
+                          : 'STT engine not loaded — PTT will not work. Download models from Settings.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: controller.isSttInitializing
+                            ? Colors.amber
+                            : theme.colorScheme.error,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
 
           // Message & Transcript Stream
           Expanded(
@@ -694,7 +756,8 @@ class _TransceiverScreenState extends State<TransceiverScreen>
                   // Main Button Circle
                   ScaleTransition(
                     scale: _pulseAnimation,
-                    child: Container(
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 300),
                       width: 124,
                       height: 124,
                       decoration: BoxDecoration(
@@ -702,19 +765,27 @@ class _TransceiverScreenState extends State<TransceiverScreen>
                         gradient: LinearGradient(
                           begin: Alignment.topLeft,
                           end: Alignment.bottomRight,
-                          colors: controller.isVadMode
-                              ? (controller.isVoiceDetected
-                                  ? [const Color(0xFF00C853), const Color(0xFF1B5E20)]
-                                  : [const Color(0xFF00897B), const Color(0xFF004D40)])
-                              : (controller.isTransmitting
-                                  ? [theme.colorScheme.error, const Color(0xFFB71C1C)]
-                                  : [theme.colorScheme.primary, const Color(0xFF0D47A1)]),
+                          colors: controller.isSttInitializing
+                              ? [Colors.amber.shade700, Colors.orange.shade900]
+                              : (!controller.isSttReady && !controller.isVadMode)
+                                  ? [Colors.grey.shade600, Colors.grey.shade800]
+                                  : controller.isVadMode
+                                      ? (controller.isVoiceDetected
+                                          ? [const Color(0xFF00C853), const Color(0xFF1B5E20)]
+                                          : [const Color(0xFF00897B), const Color(0xFF004D40)])
+                                      : (controller.isTransmitting
+                                          ? [theme.colorScheme.error, const Color(0xFFB71C1C)]
+                                          : [theme.colorScheme.primary, const Color(0xFF0D47A1)]),
                         ),
                         boxShadow: [
                           BoxShadow(
-                            color: (controller.isVadMode
-                                    ? (controller.isVoiceDetected ? Colors.green : Colors.teal)
-                                    : (controller.isTransmitting ? theme.colorScheme.error : theme.colorScheme.primary))
+                            color: (controller.isSttInitializing
+                                    ? Colors.amber
+                                    : (!controller.isSttReady && !controller.isVadMode)
+                                        ? Colors.grey
+                                        : controller.isVadMode
+                                            ? (controller.isVoiceDetected ? Colors.green : Colors.teal)
+                                            : (controller.isTransmitting ? theme.colorScheme.error : theme.colorScheme.primary))
                                 .withAlpha(controller.isTransmitting || controller.isVoiceDetected ? 160 : 90),
                             blurRadius: controller.isTransmitting || controller.isVoiceDetected ? 28 : 16,
                             spreadRadius: controller.isTransmitting || controller.isVoiceDetected ? 4 : 1,
@@ -724,18 +795,30 @@ class _TransceiverScreenState extends State<TransceiverScreen>
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(
-                            controller.isVadMode
-                                ? (controller.isVoiceDetected ? Icons.record_voice_over_rounded : Icons.hearing_rounded)
-                                : (controller.isTransmitting ? Icons.mic_rounded : Icons.mic_none_rounded),
-                            size: 44,
-                            color: Colors.white,
-                          ),
+                          if (controller.isSttInitializing)
+                            const SizedBox(
+                              width: 36, height: 36,
+                              child: CircularProgressIndicator(strokeWidth: 3, color: Colors.white),
+                            )
+                          else
+                            Icon(
+                              (!controller.isSttReady && !controller.isVadMode)
+                                  ? Icons.mic_off_rounded
+                                  : controller.isVadMode
+                                      ? (controller.isVoiceDetected ? Icons.record_voice_over_rounded : Icons.hearing_rounded)
+                                      : (controller.isTransmitting ? Icons.mic_rounded : Icons.mic_none_rounded),
+                              size: 44,
+                              color: Colors.white,
+                            ),
                           const SizedBox(height: 4),
                           Text(
-                            controller.isVadMode
-                                ? (controller.isVoiceDetected ? 'SPEAKING' : 'VAD ACTIVE')
-                                : (controller.isTransmitting ? 'RECORDING' : 'HOLD PTT'),
+                            controller.isSttInitializing
+                                ? 'LOADING...'
+                                : (!controller.isSttReady && !controller.isVadMode)
+                                    ? 'STT NEEDED'
+                                    : controller.isVadMode
+                                        ? (controller.isVoiceDetected ? 'SPEAKING' : 'VAD ACTIVE')
+                                        : (controller.isTransmitting ? 'RECORDING' : 'HOLD PTT'),
                             style: theme.textTheme.labelSmall?.copyWith(
                               color: Colors.white,
                               fontWeight: FontWeight.bold,
@@ -746,6 +829,11 @@ class _TransceiverScreenState extends State<TransceiverScreen>
                             const Text(
                               '(Hands-free)',
                               style: TextStyle(fontSize: 8.5, color: Colors.white70, fontWeight: FontWeight.w500),
+                            ),
+                          if (controller.isSttReady && !controller.isVadMode && !controller.isTransmitting)
+                            Text(
+                              '\u2713 STT Ready',
+                              style: TextStyle(fontSize: 8.5, color: Colors.greenAccent.withAlpha(200), fontWeight: FontWeight.w500),
                             ),
                         ],
                       ),
