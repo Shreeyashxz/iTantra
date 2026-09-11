@@ -36,6 +36,11 @@ class PeerController extends ChangeNotifier {
   String _connectionStatus = 'Disconnected';
   String get connectionStatus => _connectionStatus;
 
+  int get activePort => transceiverManager.activePort;
+  bool get isHotspotHost => meshManager.isHotspotHost;
+  bool get isHotspotClient => meshManager.isHotspotClient;
+  String? get hotspotHostIp => meshManager.hotspotHostIp;
+
   String get deviceId => meshManager.nodeId;
   String? get localIp => meshManager.primaryIp;
 
@@ -65,7 +70,7 @@ class PeerController extends ChangeNotifier {
     _interfaces = meshManager.activeInterfaces;
     _p2pPeers = p2pService.currentPeers;
     _p2pConnection = p2pService.currentConnection;
-    _connectionStatus = transceiverManager.isRunning ? 'Listening on port 8888' : 'Standby';
+    _connectionStatus = transceiverManager.currentStatusString;
 
     _peersSub = meshManager.peersStream.listen((list) {
       _peers = list;
@@ -171,8 +176,31 @@ class PeerController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<bool> connectToPeer(String ipAddress, {int port = TransceiverManager.port}) async {
-    final success = await meshManager.connectToPeerIp(ipAddress, port: port);
+  Future<Map<String, dynamic>> testRadioPort() async {
+    final res = await transceiverManager.testLocalPortConnection();
+    notifyListeners();
+    return res;
+  }
+
+  Future<void> changePort(int newPort) async {
+    await transceiverManager.rebindPort(newPort);
+    await meshManager.startBeaconService(
+      customNodeName: 'iTantra Node (${localIp ?? "Mesh"})',
+    );
+    notifyListeners();
+  }
+
+  Future<bool> quickConnectHotspotHost() async {
+    final host = hotspotHostIp;
+    if (host == null) return false;
+    final ok = await connectToPeer(host, port: activePort);
+    notifyListeners();
+    return ok;
+  }
+
+  Future<bool> connectToPeer(String ipAddress, {int? port}) async {
+    final destPort = port ?? activePort;
+    final success = await meshManager.connectToPeerIp(ipAddress, port: destPort);
     notifyListeners();
     return success;
   }

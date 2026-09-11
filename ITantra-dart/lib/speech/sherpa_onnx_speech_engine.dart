@@ -49,8 +49,8 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
 
   /// Resolves the models base directory.
   Future<String> _modelsDir() async {
-    final base = await getApplicationSupportDirectory();
-    return p.join(base.path, 'models');
+    final dir = await languagePackManager.getModelsDirectory();
+    return dir.path;
   }
 
   // ==========================================
@@ -363,7 +363,11 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
           tokens = mmsTokens;
         } else {
           debugPrint('[TTS] Meta MMS model not available or incomplete for $languageCode, falling back to Rasa-13');
-          return initTts(languageCode, 'AI4BHARAT_RASA');
+          final ok = await initTts(languageCode, 'AI4BHARAT_RASA');
+          if (ok && _ttsEngines.containsKey('AI4BHARAT_RASA')) {
+            _ttsEngines[engineKey] = _ttsEngines['AI4BHARAT_RASA']!;
+          }
+          return ok;
         }
       }
 
@@ -425,8 +429,18 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
     // 1. On-device neural VITS model (AI4Bharat Rasa-13 or Meta MMS)
     try {
       final ready = await initTts(languageCode, effectiveEngine);
-      if (ready && _ttsEngines.containsKey(engineKey)) {
-        final tts = _ttsEngines[engineKey]!;
+      sherpa.OfflineTts? tts = _ttsEngines[engineKey];
+      if (tts == null && _ttsEngines.containsKey('AI4BHARAT_RASA')) {
+        tts = _ttsEngines['AI4BHARAT_RASA'];
+      }
+      if (tts == null && _ttsEngines.containsKey('mms_$languageCode')) {
+        tts = _ttsEngines['mms_$languageCode'];
+      }
+      if (tts == null && _ttsEngines.isNotEmpty) {
+        tts = _ttsEngines.values.first;
+      }
+
+      if (ready && tts != null) {
         // Clean 1.0x native model synthesis (no pitch warping or male/female distortion)
         const speakerId = 0;
         const speed = 1.0;
@@ -460,7 +474,8 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
   /// Writes the generated Float32 samples to a WAV file and plays it via AudioPlayer.
   Future<void> _playGeneratedAudio(Float32List samples, int sampleRate) async {
     final tempDir = await getApplicationSupportDirectory();
-    final wavPath = p.join(tempDir.path, 'tts_output.wav');
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final wavPath = p.join(tempDir.path, 'tts_output_$timestamp.wav');
 
     final int16Samples = Int16List(samples.length);
     for (int i = 0; i < samples.length; i++) {
@@ -482,11 +497,29 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
 
     try {
       await _audioPlayer.stop();
+      await _audioPlayer.setVolume(1.0);
       await _audioPlayer.setPlaybackRate(1.0);
       await _audioPlayer.play(DeviceFileSource(wavPath));
+      debugPrint('[TTS] AudioPlayer playback active for: $wavPath');
     } catch (e) {
       debugPrint('[TTS] AudioPlayer error: $e');
     }
+
+    // Background cleanup of stale temporary WAV files
+    Future.microtask(() async {
+      try {
+        await for (final file in tempDir.list()) {
+          if (file is File &&
+              file.path.contains('tts_output_') &&
+              file.path.endsWith('.wav') &&
+              file.path != wavPath) {
+            try {
+              await file.delete();
+            } catch (_) {}
+          }
+        }
+      } catch (_) {}
+    });
   }
 
   /// Build a minimal WAV file from 16-bit PCM samples.

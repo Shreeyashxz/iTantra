@@ -67,6 +67,7 @@ class TransceiverController extends ChangeNotifier {
     required this.database,
   }) {
     deviceId = 'DEV_${Random().nextInt(90000) + 10000}';
+    _connectionStatus = transceiverManager.currentStatusString;
     _init();
   }
 

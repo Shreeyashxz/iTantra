@@ -31,6 +31,13 @@ class PeerLinkStats {
 
 class TransceiverManager {
   static const int port = 8888;
+  static const List<int> fallbackPorts = [8888, 8887, 8886, 8890];
+
+  int _activePort = port;
+  int get activePort => _activePort;
+
+  String? _lastError;
+  String? get lastError => _lastError;
 
   ServerSocket? _serverSocket;
   final Map<String, Socket> _peerSockets = {};
@@ -54,7 +61,6 @@ class TransceiverManager {
     return 'None';
   }
 
-
   bool _isRunning = false;
   bool get isRunning => _isRunning;
 
@@ -73,57 +79,120 @@ class TransceiverManager {
 
   Timer? _heartbeatTimer;
 
-  void _updateConnectionState() {
+  String get currentStatusString {
     final count = _peerSockets.length;
     if (count > 0) {
       final ips = _peerSockets.keys.join(', ');
-      _connectionStateController.add('Connected ($count peer${count > 1 ? "s" : ""}: $ips)');
+      return 'Connected ($count peer${count > 1 ? "s" : ""}: $ips)';
     } else if (_isRunning) {
-      _connectionStateController.add('Listening on port $port (Ready to pair)');
+      return 'Listening on port $_activePort (Ready to pair)';
+    } else if (_lastError != null) {
+      return _lastError!;
     } else {
-      _connectionStateController.add('Disconnected');
+      return 'Disconnected';
     }
+  }
+
+  void _updateConnectionState() {
+    _connectionStateController.add(currentStatusString);
     _statsController.add(activePeerStats);
   }
 
-  Future<void> startServer() async {
-    if (_serverSocket != null) return;
+  Future<bool> startServer({int? preferredPort}) async {
+    if (_serverSocket != null && _isRunning) {
+      if (preferredPort == null || preferredPort == _activePort) {
+        return true;
+      }
+      stop();
+    }
+
+    final portsToTry = preferredPort != null
+        ? [preferredPort, ...fallbackPorts.where((p) => p != preferredPort)]
+        : fallbackPorts;
+
+    for (final tryPort in portsToTry) {
+      try {
+        _serverSocket = await ServerSocket.bind(InternetAddress.anyIPv4, tryPort, shared: true);
+        _activePort = tryPort;
+        _isRunning = true;
+        _lastError = null;
+        _updateConnectionState();
+        debugPrint('Transceiver server active on 0.0.0.0:$_activePort');
+
+        _serverSocket!.listen(
+          (socket) {
+            final remoteIp = socket.remoteAddress.address;
+            debugPrint('Inbound connection received from $remoteIp:${socket.remotePort}');
+            _attachSocket(socket, remoteIp);
+          },
+          onError: (error) {
+            debugPrint('Transceiver server error: $error');
+            _lastError = 'Server error: $error';
+            _connectionStateController.add('Server error: $error');
+          },
+        );
+
+        // Listen for BLE fallback packets if received
+        _bleSubscription?.cancel();
+        _bleSubscription = bleTransport.incomingPackets.listen((packet) {
+          totalPacketsReceived++;
+          _incomingPacketsController.add(packet);
+        });
+
+        _startHeartbeat();
+        return true;
+      } catch (e) {
+        debugPrint('Port $tryPort busy or unavailable: $e');
+        _lastError = 'Port $tryPort busy';
+      }
+    }
+
+    _isRunning = false;
+    _connectionStateController.add('All ports (${portsToTry.join(", ")}) busy');
+    return false;
+  }
+
+  Future<void> rebindPort(int newPort) async {
+    await startServer(preferredPort: newPort);
+  }
+
+  /// Verifies whether the local TCP transceiver server is responsive on loopback
+  Future<Map<String, dynamic>> testLocalPortConnection({int? testPort}) async {
+    final target = testPort ?? _activePort;
+    final sw = Stopwatch()..start();
     try {
-      _serverSocket = await ServerSocket.bind(InternetAddress.anyIPv4, port, shared: true);
-      _isRunning = true;
-      _updateConnectionState();
-      debugPrint('Transceiver server active on 0.0.0.0:$port');
-
-      _serverSocket!.listen(
-        (socket) {
-          final remoteIp = socket.remoteAddress.address;
-          debugPrint('Inbound connection received from $remoteIp:${socket.remotePort}');
-          _attachSocket(socket, remoteIp);
-        },
-        onError: (error) {
-          debugPrint('Transceiver server error: $error');
-          _connectionStateController.add('Server error: $error');
-        },
+      final socket = await Socket.connect(
+        '127.0.0.1',
+        target,
+        timeout: const Duration(milliseconds: 1500),
       );
-
-      // Listen for BLE fallback packets if received
-      _bleSubscription?.cancel();
-      _bleSubscription = bleTransport.incomingPackets.listen((packet) {
-        totalPacketsReceived++;
-        _incomingPacketsController.add(packet);
-      });
-
-      _startHeartbeat();
+      sw.stop();
+      socket.destroy();
+      return {
+        'success': true,
+        'port': target,
+        'latencyMs': sw.elapsedMilliseconds,
+        'message': 'Port $target is OPEN and ready for transceiver traffic (~${sw.elapsedMilliseconds} ms)',
+      };
     } catch (e) {
-      debugPrint('Failed to start transceiver server on port $port: $e');
-      _connectionStateController.add('Port $port busy: $e');
+      sw.stop();
+      return {
+        'success': false,
+        'port': target,
+        'latencyMs': sw.elapsedMilliseconds,
+        'message': 'Could not connect to local port $target: $e',
+      };
     }
   }
 
+  Future<bool> connectToPeer(String ipAddress, {int? targetPort}) async {
+    final destPort = targetPort ?? _activePort;
 
-  Future<bool> connectToPeer(String ipAddress, {int targetPort = port}) async {
-    // Avoid self-connection
-    if (ipAddress == '127.0.0.1' || ipAddress == '0.0.0.0') return false;
+    // Avoid self-connection in production mesh, but handle gracefully
+    if (ipAddress == '127.0.0.1' || ipAddress == '0.0.0.0') {
+      final testRes = await testLocalPortConnection(testPort: destPort);
+      return testRes['success'] as bool;
+    }
 
     // Check if already connected
     if (_peerSockets.containsKey(ipAddress)) {
@@ -134,14 +203,14 @@ class TransceiverManager {
     try {
       final socket = await Socket.connect(
         ipAddress,
-        targetPort,
+        destPort,
         timeout: const Duration(seconds: 3),
       );
       _attachSocket(socket, ipAddress);
-      debugPrint('Outbound connection established to $ipAddress:$targetPort');
+      debugPrint('Outbound connection established to $ipAddress:$destPort');
       return true;
     } catch (e) {
-      debugPrint('Failed connecting to peer at $ipAddress:$targetPort: $e');
+      debugPrint('Failed connecting to peer at $ipAddress:$destPort: $e');
       return false;
     }
   }

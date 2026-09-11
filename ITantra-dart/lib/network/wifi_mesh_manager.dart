@@ -11,6 +11,7 @@ class NetworkInterfaceInfo {
   final String broadcastAddress;
   final bool isHotspot;
   final bool isP2P;
+  final bool isApipa;
 
   const NetworkInterfaceInfo({
     required this.name,
@@ -19,11 +20,13 @@ class NetworkInterfaceInfo {
     required this.broadcastAddress,
     required this.isHotspot,
     required this.isP2P,
+    this.isApipa = false,
   });
 
   String get typeLabel {
     if (isP2P) return 'Wi-Fi Direct P2P';
     if (isHotspot) return 'Mobile Hotspot';
+    if (isApipa) return 'Link-Local (Unconfigured)';
     return 'Wi-Fi / LAN';
   }
 }
@@ -109,7 +112,16 @@ class WifiMeshManager {
     }
   }
 
-  /// Scans local network interfaces and computes subnets/broadcasts
+  /// Checks if an IP address belongs to known mobile hotspot ranges
+  static bool isHotspotSubnet(String ip) {
+    return ip.startsWith('192.168.43.') || // Android default AP
+        ip.startsWith('192.168.137.') || // Windows Mobile Hotspot
+        ip.startsWith('172.20.10.') || // iOS Personal Hotspot
+        ip.startsWith('192.168.225.') || // Jio / OEM Hotspot
+        ip.startsWith('192.168.44.'); // Custom Android AP
+  }
+
+  /// Scans local network interfaces, computes subnets, and prioritizes active routable Wi-Fi
   Future<List<NetworkInterfaceInfo>> refreshInterfaces() async {
     final list = <NetworkInterfaceInfo>[];
     try {
@@ -125,8 +137,10 @@ class WifiMeshManager {
             final lastDot = ip.lastIndexOf('.');
             if (lastDot != -1) {
               final prefix = ip.substring(0, lastDot);
-              final isHotspot = ip.startsWith('192.168.43.');
+              final isHotspot = isHotspotSubnet(ip);
               final isP2P = ip.startsWith('192.168.49.');
+              final isApipa = ip.startsWith('169.254.');
+
               list.add(
                 NetworkInterfaceInfo(
                   name: iface.name,
@@ -135,15 +149,33 @@ class WifiMeshManager {
                   broadcastAddress: '$prefix.255',
                   isHotspot: isHotspot,
                   isP2P: isP2P,
+                  isApipa: isApipa,
                 ),
               );
             }
           }
         }
       }
+
+      // Rank interfaces: Hotspot > P2P > LAN/Wi-Fi > APIPA (Link-Local)
+      list.sort((a, b) {
+        int rank(NetworkInterfaceInfo info) {
+          if (info.isApipa) return 4;
+          if (info.isHotspot) return 0;
+          if (info.isP2P) return 1;
+          if (info.ipAddress.startsWith('192.168.') ||
+              info.ipAddress.startsWith('10.') ||
+              info.ipAddress.startsWith('172.')) {
+            return 2;
+          }
+          return 3;
+        }
+        return rank(a).compareTo(rank(b));
+      });
     } catch (e) {
       debugPrint('Error inspecting network interfaces: $e');
     }
+
     _activeInterfaces = list;
     if (!_isDisposed && !_interfacesController.isClosed) {
       _interfacesController.add(_activeInterfaces);
@@ -151,8 +183,30 @@ class WifiMeshManager {
     return list;
   }
 
-  /// Returns primary active IP or null
-  String? get primaryIp => _activeInterfaces.isNotEmpty ? _activeInterfaces.first.ipAddress : null;
+  /// Returns primary active IP, strictly prioritizing real routable Wi-Fi over APIPA (169.254.*)
+  String? get primaryIp {
+    final routable = _activeInterfaces.where((i) => !i.isApipa);
+    if (routable.isNotEmpty) return routable.first.ipAddress;
+    return _activeInterfaces.isNotEmpty ? _activeInterfaces.first.ipAddress : null;
+  }
+
+  /// Returns true if this device is hosting a mobile hotspot AP (.1)
+  bool get isHotspotHost =>
+      _activeInterfaces.any((i) => i.isHotspot && i.ipAddress.endsWith('.1'));
+
+  /// Returns true if this device is connected to a mobile hotspot as a client
+  bool get isHotspotClient =>
+      _activeInterfaces.any((i) => i.isHotspot && !i.ipAddress.endsWith('.1'));
+
+  /// Returns the Hotspot Gateway Host IP (.1) if connected to a hotspot
+  String? get hotspotHostIp {
+    for (final iface in _activeInterfaces) {
+      if (iface.isHotspot && !iface.ipAddress.endsWith('.1')) {
+        return '${iface.subnetPrefix}.1';
+      }
+    }
+    return null;
+  }
 
   /// Starts the multi-interface UDP broadcast & Multicast presence beacon
   Future<void> startBeaconService({String? customNodeName}) async {
@@ -171,6 +225,13 @@ class WifiMeshManager {
 
     // Send initial beacon immediately
     _sendPresenceBeacon();
+
+    // Hybrid Auto-Connect: if we are a Hotspot client, proactively link to the AP host (.1)
+    if (autoConnect && isHotspotClient && hotspotHostIp != null) {
+      final hostIp = hotspotHostIp!;
+      debugPrint('[Hybrid Discovery] Detected Hotspot Host at $hostIp. Auto-linking...');
+      transceiverManager.connectToPeer(hostIp);
+    }
   }
 
   Future<void> _startReceivers() async {
@@ -224,7 +285,7 @@ class WifiMeshManager {
   Future<void> _sendPresenceBeacon() async {
     if (!_isBeaconing) return;
     final myIp = primaryIp ?? '0.0.0.0';
-    final payload = '$beaconPrefix$nodeId:$nodeName:$myIp:${TransceiverManager.port}';
+    final payload = '$beaconPrefix$nodeId:$nodeName:$myIp:${transceiverManager.activePort}';
     final bytes = utf8.encode(payload);
 
     try {
@@ -239,8 +300,8 @@ class WifiMeshManager {
         _broadcastSocket!.send(bytes, multicastAddress, beaconPort);
       } catch (_) {}
 
-      // 3. Directed subnet broadcasts for each active interface
-      for (final iface in _activeInterfaces) {
+      // 3. Directed subnet broadcasts for each active non-APIPA interface
+      for (final iface in _activeInterfaces.where((i) => !i.isApipa)) {
         try {
           _broadcastSocket!.send(bytes, InternetAddress(iface.broadcastAddress), beaconPort);
         } catch (_) {}
@@ -261,7 +322,7 @@ class WifiMeshManager {
         final peerId = parts[0];
         final peerName = parts[1];
         final announcedIp = parts[2];
-        final port = int.tryParse(parts[3]) ?? TransceiverManager.port;
+        final port = int.tryParse(parts[3]) ?? transceiverManager.activePort;
 
         // Resolve real IP: if announced IP is 0.0.0.0, use the socket remote address
         final peerIp = (announcedIp.isNotEmpty && announcedIp != '0.0.0.0')
@@ -277,7 +338,7 @@ class WifiMeshManager {
         String netType = 'Wi-Fi Peer';
         if (peerIp.startsWith('192.168.49.')) {
           netType = 'Wi-Fi Direct P2P';
-        } else if (peerIp.startsWith('192.168.43.')) {
+        } else if (isHotspotSubnet(peerIp)) {
           netType = 'Mobile Hotspot';
         }
 
@@ -313,7 +374,14 @@ class WifiMeshManager {
   }
 
   void _autoConnectToPeer(String peerIp, int port) {
-    // Symmetrical tie-breaker: device with lexicographically smaller IP initiates outbound TCP link
+    // Hybrid Hotspot Rule: If this device is a Hotspot Client, proactively link to the Hotspot Host (.1)
+    if (isHotspotClient && peerIp == hotspotHostIp) {
+      debugPrint('[Hybrid Discovery] Auto-linking client to Hotspot Host at $peerIp:$port...');
+      transceiverManager.connectToPeer(peerIp, targetPort: port);
+      return;
+    }
+
+    // Symmetrical tie-breaker for general peer mesh: device with smaller IP initiates outbound TCP link
     final myIp = primaryIp ?? '';
     if (myIp.isNotEmpty && myIp.compareTo(peerIp) < 0) {
       debugPrint('Auto-linking mesh to $peerIp:$port (tie-breaker: initiator)...');
@@ -342,7 +410,7 @@ class WifiMeshManager {
     }
   }
 
-  /// High-speed parallel subnet prober across all active network interfaces
+  /// High-speed parallel subnet prober across all active network interfaces (skips APIPA)
   Future<List<MeshPeer>> probeSubnet() async {
     if (_isScanning) return currentPeers;
     _isScanning = true;
@@ -350,7 +418,10 @@ class WifiMeshManager {
 
     await refreshInterfaces();
     final myIps = _activeInterfaces.map((i) => i.ipAddress).toSet();
-    final prefixes = _activeInterfaces.map((i) => i.subnetPrefix).toSet();
+    final prefixes = _activeInterfaces
+        .where((i) => !i.isApipa && !i.ipAddress.startsWith('127.'))
+        .map((i) => i.subnetPrefix)
+        .toSet();
 
     if (prefixes.isEmpty) {
       prefixes.add('192.168.1');
@@ -358,6 +429,7 @@ class WifiMeshManager {
     }
 
     final found = <MeshPeer>[];
+    final activePort = transceiverManager.activePort;
 
     for (final prefix in prefixes) {
       final batchTasks = <Future<void>>[];
@@ -370,22 +442,25 @@ class WifiMeshManager {
           try {
             final socket = await Socket.connect(
               targetIp,
-              TransceiverManager.port,
-              timeout: const Duration(milliseconds: 200),
+              activePort,
+              timeout: const Duration(milliseconds: 220),
             );
             socket.destroy();
 
             final isHost = i == 1;
+            final isHotspot = isHotspotSubnet(targetIp);
             final peer = MeshPeer(
               id: 'PROBE_NODE_$i',
-              name: isHost ? 'Base Gateway ($targetIp)' : 'iTantra Node ($targetIp)',
+              name: (isHost && isHotspot)
+                  ? 'Hotspot Host ($targetIp)'
+                  : (isHost ? 'Router/Host ($targetIp)' : 'iTantra Node ($targetIp)'),
               ipAddress: targetIp,
-              port: TransceiverManager.port,
+              port: activePort,
               lastSeen: DateTime.now(),
               isHost: isHost,
-              networkType: prefix == '192.168.49'
+              networkType: targetIp.startsWith('192.168.49')
                   ? 'Wi-Fi Direct'
-                  : (prefix == '192.168.43' ? 'Mobile Hotspot' : 'Wi-Fi Subnet'),
+                  : (isHotspot ? 'Mobile Hotspot' : 'Wi-Fi Subnet'),
             );
 
             _discoveredPeers[targetIp] = peer;
@@ -393,7 +468,7 @@ class WifiMeshManager {
 
             // Immediately auto-connect
             if (autoConnect) {
-              transceiverManager.connectToPeer(targetIp);
+              transceiverManager.connectToPeer(targetIp, targetPort: activePort);
             }
           } catch (_) {}
         }());
@@ -418,13 +493,14 @@ class WifiMeshManager {
   }
 
   /// Connects to a peer explicitly by IP address
-  Future<bool> connectToPeerIp(String ipAddress, {int port = TransceiverManager.port}) async {
-    _updateStatus('Connecting to $ipAddress:$port...');
-    final success = await transceiverManager.connectToPeer(ipAddress, targetPort: port);
+  Future<bool> connectToPeerIp(String ipAddress, {int? port}) async {
+    final targetPort = port ?? transceiverManager.activePort;
+    _updateStatus('Connecting to $ipAddress:$targetPort...');
+    final success = await transceiverManager.connectToPeer(ipAddress, targetPort: targetPort);
     if (success) {
-      _updateStatus('Connected to $ipAddress:$port');
+      _updateStatus('Connected to $ipAddress:$targetPort');
     } else {
-      _updateStatus('Could not reach $ipAddress:$port');
+      _updateStatus('Could not reach $ipAddress:$targetPort');
     }
     return success;
   }
@@ -432,10 +508,11 @@ class WifiMeshManager {
   /// Quick link to Gateway / AP host (.1)
   Future<bool> connectToGateway() async {
     await refreshInterfaces();
-    for (final iface in _activeInterfaces) {
+    final targetPort = transceiverManager.activePort;
+    for (final iface in _activeInterfaces.where((i) => !i.isApipa)) {
       final gatewayIp = '${iface.subnetPrefix}.1';
       if (gatewayIp != iface.ipAddress) {
-        final ok = await connectToPeerIp(gatewayIp);
+        final ok = await connectToPeerIp(gatewayIp, port: targetPort);
         if (ok) return true;
       }
     }

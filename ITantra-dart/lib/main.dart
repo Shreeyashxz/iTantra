@@ -93,6 +93,7 @@ void main() async {
   // Core singletons (matching Hilt AppModule / SpeechModule / TransportModule / DatabaseModule)
   final database = AppDatabase.instance;
   final languagePackManager = LanguagePackManager();
+  await languagePackManager.syncExistingModels();
   final audioRecorder = AudioRecorderService();
   final vadEngine = SileroVadEngine();
   final speechEngine = SherpaOnnxSpeechEngine(languagePackManager: languagePackManager);

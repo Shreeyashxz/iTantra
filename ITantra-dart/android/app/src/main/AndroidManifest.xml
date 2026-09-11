@@ -28,6 +28,7 @@
         android:label="iTantra"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
+        android:hasFragileUserData="true"
         android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"

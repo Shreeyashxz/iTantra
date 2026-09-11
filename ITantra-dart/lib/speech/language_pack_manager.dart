@@ -67,13 +67,123 @@ class LanguagePackManager {
     _downloadStateController.add(state);
   }
 
+  Directory? _cachedModelsDir;
+
   Future<Directory> getModelsDirectory() async {
+    if (_cachedModelsDir != null && await _cachedModelsDir!.exists()) {
+      return _cachedModelsDir!;
+    }
     final baseDir = await getApplicationSupportDirectory();
     final dir = Directory(p.join(baseDir.path, 'models'));
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
+    _cachedModelsDir = dir;
+    // Non-blocking background sync of existing models from candidate locations
+    unawaited(syncExistingModels());
     return dir;
+  }
+
+  /// Returns all candidate directories where existing models may reside
+  /// across app updates, dev runs, or secondary storage.
+  Future<List<Directory>> getCandidateModelDirectories() async {
+    final List<Directory> dirs = [];
+
+    // 1. Primary: Application Support directory (standard persistent app data)
+    try {
+      final supportDir = await getApplicationSupportDirectory();
+      dirs.add(Directory(p.join(supportDir.path, 'models')));
+    } catch (_) {}
+
+    // 2. Application Documents directory (alternative persistent data)
+    try {
+      final docDir = await getApplicationDocumentsDirectory();
+      dirs.add(Directory(p.join(docDir.path, 'models')));
+    } catch (_) {}
+
+    // 3. Android External Storage directory
+    if (!kIsWeb && Platform.isAndroid) {
+      try {
+        final extDir = await getExternalStorageDirectory();
+        if (extDir != null) {
+          dirs.add(Directory(p.join(extDir.path, 'models')));
+        }
+      } catch (_) {}
+    }
+
+    // 4. Executable / Portable relative directory (Windows / Linux)
+    if (!kIsWeb && (Platform.isWindows || Platform.isLinux)) {
+      try {
+        final exeDir = File(Platform.resolvedExecutable).parent.path;
+        dirs.add(Directory(p.join(exeDir, 'models')));
+      } catch (_) {}
+    }
+
+    // 5. Current Working Directory (development runs / bundled workspace models)
+    try {
+      dirs.add(Directory(p.join(Directory.current.path, 'models')));
+      dirs.add(Directory(p.join(Directory.current.path, 'converted_models')));
+    } catch (_) {}
+
+    return dirs;
+  }
+
+  /// Scans all candidate model directories and ensures any existing neural model files
+  /// are preserved and copied to the primary models directory so they are never lost on app updates.
+  Future<void> syncExistingModels() async {
+    try {
+      final baseDir = await getApplicationSupportDirectory();
+      final primaryDir = Directory(p.join(baseDir.path, 'models'));
+      if (!await primaryDir.exists()) {
+        await primaryDir.create(recursive: true);
+      }
+
+      // Check bundled converted_models Rasa-13
+      final localRasaModel = File('converted_models/vits_rasa13_6in.onnx');
+      final localRasaTokens = File('converted_models/tokens.txt');
+      if (await localRasaModel.exists() && (await localRasaModel.length()) > 10 * 1024 * 1024) {
+        final targetRasaDir = Directory(p.join(primaryDir.path, 'tts', 'rasa13'));
+        final targetRasaModel = File(p.join(targetRasaDir.path, 'vits.onnx'));
+        final targetRasaTokens = File(p.join(targetRasaDir.path, 'tokens.txt'));
+        if (!await targetRasaModel.exists() || (await targetRasaModel.length()) < 10 * 1024 * 1024) {
+          await targetRasaDir.create(recursive: true);
+          await localRasaModel.copy(targetRasaModel.path);
+          if (await localRasaTokens.exists()) {
+            await localRasaTokens.copy(targetRasaTokens.path);
+          }
+          debugPrint('[LanguagePackManager] Synced bundled Rasa-13 model to persistent storage: ${targetRasaModel.path}');
+        }
+      }
+
+      final candidates = await getCandidateModelDirectories();
+      for (final candidate in candidates) {
+        if (candidate.path == primaryDir.path || !await candidate.exists()) {
+          continue;
+        }
+
+        await for (final entity in candidate.list(recursive: true, followLinks: false)) {
+          if (entity is File) {
+            final relPath = p.relative(entity.path, from: candidate.path);
+            final ext = p.extension(entity.path).toLowerCase();
+            if (!{'.onnx', '.model', '.txt', '.json', '.data'}.contains(ext)) {
+              continue;
+            }
+
+            final destFile = File(p.join(primaryDir.path, relPath));
+            if (!await destFile.exists() || (await destFile.length()) == 0) {
+              final srcLen = await entity.length();
+              if (srcLen > 0) {
+                await destFile.parent.create(recursive: true);
+                await entity.copy(destFile.path);
+                debugPrint('[LanguagePackManager] Preserved existing model asset across update: $relPath ($srcLen bytes)');
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[LanguagePackManager] Model synchronization check completed with notice: $e');
+    }
   }
 
   Future<bool> isTtsAvailable(String languageCode) async {
@@ -94,24 +204,30 @@ class LanguagePackManager {
     final dir = await getModelsDirectory();
     final model = File(p.join(dir.path, 'tts', 'rasa13', 'vits.onnx'));
     final tokens = File(p.join(dir.path, 'tts', 'rasa13', 'tokens.txt'));
-    if (!await model.exists() || !await tokens.exists()) return false;
-    return (await model.length()) > 10 * 1024 * 1024;
+    if (await model.exists() && await tokens.exists()) {
+      return (await model.length()) > 10 * 1024 * 1024;
+    }
+    return false;
   }
 
   Future<bool> isMmsAvailable(String languageCode) async {
     final dir = await getModelsDirectory();
     final model = File(p.join(dir.path, 'tts', languageCode, 'vits.onnx'));
     final tokens = File(p.join(dir.path, 'tts', languageCode, 'tokens.txt'));
-    if (!await model.exists() || !await tokens.exists()) return false;
-    return (await model.length()) > 10 * 1024 * 1024;
+    if (await model.exists() && await tokens.exists()) {
+      return (await model.length()) > 10 * 1024 * 1024;
+    }
+    return false;
   }
 
   Future<bool> isSttAvailable() async {
     final dir = await getModelsDirectory();
     final indic = File(p.join(dir.path, 'stt', 'indic_conformer.onnx'));
     final tokens = File(p.join(dir.path, 'stt', 'tokens.txt'));
-    if (!await indic.exists() || !await tokens.exists()) return false;
-    return (await indic.length()) > 10 * 1024 * 1024;
+    if (await indic.exists() && await tokens.exists()) {
+      return (await indic.length()) > 10 * 1024 * 1024;
+    }
+    return false;
   }
 
   Future<bool> isSttFp32Available() async {
@@ -282,13 +398,14 @@ class LanguagePackManager {
       await sttDir.create(recursive: true);
     }
 
-    // Clean out old Zipformer models to ensure fresh AI4Bharat IndicConformer
-    final oldZipformer = File(p.join(sttDir.path, 'encoder.onnx'));
-    if (await oldZipformer.exists()) {
-      try {
-        await sttDir.delete(recursive: true);
-        await sttDir.create(recursive: true);
-      } catch (_) {}
+    // Clean out only obsolete Zipformer files if present, without deleting the entire directory
+    for (final obsolete in ['encoder.onnx', 'decoder.onnx', 'joiner.onnx']) {
+      final f = File(p.join(sttDir.path, obsolete));
+      if (await f.exists()) {
+        try {
+          await f.delete();
+        } catch (_) {}
+      }
     }
 
     // AI4Bharat IndicConformer quantized INT8 model for Sherpa-ONNX
@@ -302,7 +419,8 @@ class LanguagePackManager {
     try {
       for (final (remote, local) in files) {
         final targetFile = File(p.join(sttDir.path, local));
-        if (!await targetFile.exists() || (await targetFile.length()) == 0) {
+        final minSize = local.endsWith('.onnx') ? 10 * 1024 * 1024 : 100;
+        if (!await targetFile.exists() || (await targetFile.length()) < minSize) {
           _emitState(DownloadStateDownloading('IndicConformer ($local)', 0, modelKey: 'stt'));
           await _downloadFileWithRedirects('$indicBaseUrl/$remote', targetFile, (percent) {
             _emitState(DownloadStateDownloading('IndicConformer ($local)', percent, modelKey: 'stt'));
@@ -351,7 +469,8 @@ class LanguagePackManager {
     try {
       for (final (remote, local) in files) {
         final targetFile = File(p.join(sttDir.path, local));
-        if (!await targetFile.exists() || (await targetFile.length()) == 0) {
+        final minSize = local.endsWith('.onnx') ? 10 * 1024 * 1024 : 100;
+        if (!await targetFile.exists() || (await targetFile.length()) < minSize) {
           _emitState(DownloadStateDownloading('IndicConformer FP32 ($local)', 0, modelKey: 'stt_fp32'));
           await _downloadFileWithRedirects('$indicBaseUrl/$remote', targetFile, (percent) {
             _emitState(DownloadStateDownloading('IndicConformer FP32 ($local)', percent, modelKey: 'stt_fp32'));
@@ -420,6 +539,14 @@ class LanguagePackManager {
     final targetModel = File(p.join(rasaDir.path, 'vits.onnx'));
     final targetTokens = File(p.join(rasaDir.path, 'tokens.txt'));
 
+    if (await targetModel.exists() &&
+        (await targetModel.length()) > 10 * 1024 * 1024 &&
+        await targetTokens.exists() &&
+        (await targetTokens.length()) > 100) {
+      _emitState(const DownloadStateCompleted('AI4Bharat Rasa-13 VITS Ready (All Languages)'));
+      return true;
+    }
+
     // 1. Check if local sanitized 6-input model is ready
     final localConverted = File('converted_models/vits_rasa13_6in.onnx');
     final localTokens = File('converted_models/tokens.txt');
@@ -440,7 +567,7 @@ class LanguagePackManager {
         await _downloadFileWithRedirects('$rasaBaseUrl/tokens.txt', targetTokens, (pct) {});
       }
 
-      if (!await targetModel.exists() || (await targetModel.length()) == 0) {
+      if (!await targetModel.exists() || (await targetModel.length()) < 10 * 1024 * 1024) {
         await _downloadFileWithRedirects('$rasaBaseUrl/model.onnx', targetModel, (percent) {
           _emitState(DownloadStateDownloading('AI4Bharat Rasa-13 VITS (All Languages)', percent, modelKey: 'rasa13'));
         });
@@ -496,7 +623,7 @@ class LanguagePackManager {
       final targetTokens = File(p.join(ttsDir.path, 'tokens.txt'));
       final targetLexicon = File(p.join(ttsDir.path, 'lexicon.txt'));
 
-      if (!await targetModel.exists() || (await targetModel.length()) == 0) {
+      if (!await targetModel.exists() || (await targetModel.length()) < 10 * 1024 * 1024) {
         _emitState(DownloadStateDownloading('${langMeta.englishName} Voice (Model)', 0, modelKey: 'tts_$languageCode'));
         await _downloadFileWithRedirects('$mmsBaseUrl/model.onnx', targetModel, (percent) {
           _emitState(DownloadStateDownloading('${langMeta.englishName} Voice (Model)', percent, modelKey: 'tts_$languageCode'));

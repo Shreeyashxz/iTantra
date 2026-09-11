@@ -98,6 +98,9 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
   String _t3Lang = 'en';
   String _t3Engine = 'META_MMS';
   String _t3Gender = 'FEMALE';
+  final TextEditingController _t3Controller = TextEditingController(
+    text: 'Emergency priority alert. Voice transceiver link healthy.',
+  );
   String _t3RecognizedText = '';
   bool _t3IsSynthesizing = false;
   String _t3Status = 'Idle (Ready for mic loop)';
@@ -197,6 +200,7 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
     _recorder.dispose();
     _vad.stopVad();
     _t2Controller.dispose();
+    _t3Controller.dispose();
     _t5Controller.dispose();
     _t7Controller.dispose();
     super.dispose();
@@ -553,20 +557,67 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
   }
 
   // --- Test 3: STT -> TTS Direct Voice Loop (No MT) ---
+  Future<void> _runT3DirectSynthesis([String? textOverride]) async {
+    final text = (textOverride ?? _t3Controller.text).trim();
+    if (text.isEmpty) {
+      setState(() => _t3Status = 'Please enter text or speak into the microphone.');
+      return;
+    }
+
+    await _ensureTtsLoaded(_t3Lang, _t3Engine);
+    if (!mounted) return;
+    final speech = context.read<TransceiverController>().speechEngine;
+
+    setState(() {
+      _t3RecognizedText = text;
+      _t3IsSynthesizing = true;
+      _t3Status = 'Synthesizing voice output in [$_t3Lang] with $_t3Engine...';
+    });
+
+    final ttsStart = DateTime.now();
+    try {
+      await speech.synthesizeSpeech(text, _t3Lang, _t3Gender, _t3Engine);
+      final ttsMs = DateTime.now().difference(ttsStart).inMilliseconds;
+      if (mounted) {
+        setState(() {
+          _t3IsSynthesizing = false;
+          _t3TtsMs = ttsMs;
+          _t3TotalMs = ttsMs;
+          _t3Status = 'Voice output active! Spoke in [$_t3Lang] (${ttsMs}ms)';
+        });
+      }
+      _log('Test 3 Voice Output [$_t3Lang, $_t3Engine]: "$text" in ${ttsMs}ms');
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _t3IsSynthesizing = false;
+          _t3Status = 'TTS Error: $e';
+        });
+      }
+      _log('Test 3 Voice Output Error: $e');
+    }
+  }
+
   Future<void> _toggleT3Recording() async {
     if (_activeRecordingTest == 3) {
       final sttStart = DateTime.now();
       final transcript = await _stopAudioCapture();
       final sttMs = DateTime.now().difference(sttStart).inMilliseconds;
 
-      final recognized = transcript.isNotEmpty ? transcript : _t3RecognizedText;
-      if (recognized.trim().isEmpty) {
+      final recognized = transcript.trim().isNotEmpty
+          ? transcript.trim()
+          : (_t3Controller.text.trim().isNotEmpty
+              ? _t3Controller.text.trim()
+              : _t3RecognizedText.trim());
+
+      if (recognized.isEmpty) {
         setState(() {
-          _t3Status = 'No speech detected — loopback aborted.';
+          _t3Status = 'No speech detected — please speak or use "Direct Voice Output".';
         });
         return;
       }
 
+      _t3Controller.text = recognized;
       setState(() {
         _t3RecognizedText = recognized;
         _t3SttMs = sttMs;
@@ -586,7 +637,7 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
             _t3IsSynthesizing = false;
             _t3TtsMs = ttsMs;
             _t3TotalMs = sttMs + ttsMs;
-            _t3Status = 'Direct loopback complete! Spoke in [$_t3Lang]';
+            _t3Status = 'Direct loopback voice output complete! Spoke in [$_t3Lang]';
           });
         }
         _log('Test 3 STT->TTS Loop: "$recognized" (STT: ${sttMs}ms, TTS: ${ttsMs}ms)');
@@ -613,7 +664,10 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
         testId: 3,
         langCode: _t3Lang,
         onLiveTranscript: (live) {
-          setState(() => _t3RecognizedText = live);
+          setState(() {
+            _t3RecognizedText = live;
+            _t3Controller.text = live;
+          });
         },
       );
     }
@@ -2649,33 +2703,80 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
           ),
           const SizedBox(height: 10),
           _buildLanguageSelector(
-            title: 'Loopback Language (All 10, Default: EN):',
+            title: 'Loopback Language (All 10 Languages):',
             selectedLang: _t3Lang,
             onSelected: (l) {
-              setState(() => _t3Lang = l);
+              setState(() {
+                _t3Lang = l;
+                _t3Controller.text = _presets[l] ?? _presets['en']!;
+              });
               _ensureTtsLoaded(l, _t3Engine);
             },
+          ),
+          _buildPresetChips(
+            langCode: _t3Lang,
+            onSelectPreset: (p) => setState(() => _t3Controller.text = p),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _t3Controller,
+            maxLines: 2,
+            decoration: InputDecoration(
+              labelText: 'Test Phrase / Speech Text (Type or Speak)',
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+              contentPadding: const EdgeInsets.all(10),
+            ),
           ),
           const SizedBox(height: 10),
           _buildMicMeter(isRecording: isRecording),
           const SizedBox(height: 10),
-          ElevatedButton.icon(
-            icon: _t3IsSynthesizing
-                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
-                : Icon(isRecording ? Icons.stop : Icons.loop_rounded),
-            label: Text(_t3IsSynthesizing
-                ? 'Synthesizing Audio Loopback...'
-                : (isRecording ? 'Stop & Speak Immediately' : 'Start Voice Loopback Test')),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: isRecording ? Colors.redAccent : const Color(0xFFFF9100),
-              foregroundColor: Colors.black,
-            ),
-            onPressed: _t3IsSynthesizing ? null : _toggleT3Recording,
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  icon: _t3IsSynthesizing
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
+                        )
+                      : Icon(isRecording ? Icons.stop : Icons.mic_rounded),
+                  label: Text(_t3IsSynthesizing
+                      ? 'Speaking Audio Loop...'
+                      : (isRecording ? 'Stop & Speak Immediately' : 'Record Loop (Mic)')),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: isRecording ? Colors.redAccent : const Color(0xFFFF9100),
+                    foregroundColor: Colors.black,
+                  ),
+                  onPressed: _t3IsSynthesizing ? null : _toggleT3Recording,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.volume_up_rounded),
+                  label: const Text('Direct Voice Output'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF00E676),
+                    foregroundColor: Colors.black,
+                  ),
+                  onPressed: _t3IsSynthesizing || isRecording
+                      ? null
+                      : () => _runT3DirectSynthesis(),
+                ),
+              ),
+              const SizedBox(width: 6),
+              IconButton.outlined(
+                icon: const Icon(Icons.stop, color: Colors.redAccent),
+                tooltip: 'Stop Playback',
+                onPressed: _stopTtsPlayback,
+              ),
+            ],
           ),
           const SizedBox(height: 10),
           _buildOutputWindow(
             title: 'RECOGNIZED & SPOKEN TEXT',
-            content: _t3RecognizedText,
+            content: _t3RecognizedText.isNotEmpty ? _t3RecognizedText : _t3Controller.text,
           ),
           const SizedBox(height: 6),
           Text(_t3Status, style: const TextStyle(fontSize: 11, color: Colors.grey)),
@@ -2684,7 +2785,7 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
             _buildMetricsBar([
               MapEntry('STT', '${_t3SttMs}ms'),
               MapEntry('TTS', '${_t3TtsMs}ms'),
-              MapEntry('Roundtrip', '${_t3TotalMs}ms'),
+              MapEntry('Total', '${_t3TotalMs}ms'),
             ]),
           ],
         ],
