@@ -244,5 +244,10 @@ flutter build apk --release
 
 ## 8. License & Acknowledgements
 
-Developed for **Smart India Hackathon 2026** under Problem Statement **SIH 26173**, sponsored by the **Indian Space Research Organisation (ISRO)**.
+Developed for **Smart India Hackathon 2026** under Problem Statement **SIH 26173**, sponsored by the **Indian Space Research Organisation (ISRO)**.  
 Special acknowledgment to **AI4Bharat** and the **Meta MMS** research teams for Indic neural speech models and benchmarks.
+
+For a comprehensive evaluation of current and prospective open-source models across STT, TTS, MT, Transliteration, and Neural Codecs, refer to:
+- [Open-Source Models & Techniques Catalog](ITantra-dart-v2/OPEN_SOURCE_MODELS_CATALOG.md)
+- [Bhashini API Models Analysis](ITantra-dart-v2/BHASHINI_MODELS_ANALYSIS.md)
+

@@ -41,3 +41,12 @@ flutter run -d windows
 # Run on Android
 flutter run -d android
 ```
+
+---
+
+## Future Roadmap & Reference Catalogs (ITantra-dart-v2)
+
+- [Open-Source Models & Techniques Catalog](../ITantra-dart-v2/OPEN_SOURCE_MODELS_CATALOG.md) — Comprehensive offline-first model alternatives, benchmarks, and future upgrade options (STT, TTS, MT, Transliteration, VAD, Neural Codecs, LID).
+- [Bhashini API Models Analysis](../ITantra-dart-v2/BHASHINI_MODELS_ANALYSIS.md) — Detailed mapping of cloud-hosted Bhashini microservices for fallback, benchmarking, and future voice cloning integration.
+
+
