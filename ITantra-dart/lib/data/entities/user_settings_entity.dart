@@ -12,6 +12,7 @@ class UserSettingsEntity {
   final bool isMtEnabled;
   final String sttPrecision; // 'INT8' or 'FP32'
   final String mtPrecision; // 'INT8' or 'FP16'
+  final String normalizerMode; // 'ADVANCED' or 'LEGACY_RULE_BASED'
 
   UserSettingsEntity({
     this.id = 1,
@@ -27,6 +28,7 @@ class UserSettingsEntity {
     this.isMtEnabled = true,
     this.sttPrecision = 'INT8',
     this.mtPrecision = 'INT8',
+    this.normalizerMode = 'ADVANCED',
   });
 
   Map<String, dynamic> toMap() => {
@@ -43,6 +45,7 @@ class UserSettingsEntity {
     'isMtEnabled': isMtEnabled ? 1 : 0,
     'sttPrecision': sttPrecision,
     'mtPrecision': mtPrecision,
+    'normalizerMode': normalizerMode,
   };
 
   factory UserSettingsEntity.fromMap(Map<String, dynamic> map) => UserSettingsEntity(
@@ -59,6 +62,7 @@ class UserSettingsEntity {
     isMtEnabled: (map['isMtEnabled'] as int? ?? 1) == 1,
     sttPrecision: map['sttPrecision'] as String? ?? 'INT8',
     mtPrecision: map['mtPrecision'] as String? ?? 'INT8',
+    normalizerMode: map['normalizerMode'] as String? ?? 'ADVANCED',
   );
 
   UserSettingsEntity copyWith({
@@ -75,6 +79,7 @@ class UserSettingsEntity {
     bool? isMtEnabled,
     String? sttPrecision,
     String? mtPrecision,
+    String? normalizerMode,
   }) => UserSettingsEntity(
     id: id ?? this.id,
     preferredLanguage: preferredLanguage ?? this.preferredLanguage,
@@ -89,5 +94,6 @@ class UserSettingsEntity {
     isMtEnabled: isMtEnabled ?? this.isMtEnabled,
     sttPrecision: sttPrecision ?? this.sttPrecision,
     mtPrecision: mtPrecision ?? this.mtPrecision,
+    normalizerMode: normalizerMode ?? this.normalizerMode,
   );
 }

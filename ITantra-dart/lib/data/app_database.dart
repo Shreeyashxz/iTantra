@@ -34,7 +34,7 @@ class AppDatabase {
 
     return await openDatabase(
       path,
-      version: 8,
+      version: 9,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -87,7 +87,8 @@ class AppDatabase {
         autoPlayAudio INTEGER NOT NULL DEFAULT 1,
         isMtEnabled INTEGER NOT NULL DEFAULT 1,
         sttPrecision TEXT NOT NULL DEFAULT 'INT8',
-        mtPrecision TEXT NOT NULL DEFAULT 'INT8'
+        mtPrecision TEXT NOT NULL DEFAULT 'INT8',
+        normalizerMode TEXT NOT NULL DEFAULT 'ADVANCED'
       )
     ''');
 
@@ -124,6 +125,11 @@ class AppDatabase {
     if (oldVersion < 8) {
       try {
         await db.execute("ALTER TABLE user_settings ADD COLUMN mtPrecision TEXT NOT NULL DEFAULT 'INT8'");
+      } catch (_) {}
+    }
+    if (oldVersion < 9) {
+      try {
+        await db.execute("ALTER TABLE user_settings ADD COLUMN normalizerMode TEXT NOT NULL DEFAULT 'ADVANCED'");
       } catch (_) {}
     }
   }

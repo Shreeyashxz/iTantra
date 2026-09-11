@@ -1,4 +1,10 @@
 import 'package:flutter/foundation.dart';
+import 'phonological_transliteration_matrix.dart';
+
+enum NormalizerMode {
+  advanced,
+  legacyRuleBased,
+}
 
 enum ScriptType {
   latin,
@@ -71,6 +77,9 @@ extension ScriptTypeExtension on ScriptType {
 /// Robust script normalization and cross-model script bridging engine.
 /// Handles phonetics, inter-Indic transliteration, Latin bridging, and single-script VITS enforcement.
 class ScriptNormalizationEngine {
+  /// Active normalizer mode (defaults to Advanced Phonological Matrix, togglable to Legacy Rule-Based).
+  static NormalizerMode activeMode = NormalizerMode.advanced;
+
   // --- Tactical & Emergency Lexicon ---
   static const Map<String, String> _devanagariToEnglishLexicon = {
     'हैलो': 'Hello',
@@ -287,21 +296,32 @@ class ScriptNormalizationEngine {
     }
   }
 
-  /// Converts any Indic script character to its canonical Devanagari counterpart
-  /// using the standard ISCII/Unicode block homologous alignment.
+  /// Converts any Indic script character to its canonical Devanagari counterpart.
+  /// Uses PhonologicalTransliterationMatrix in Advanced mode, or legacy ISCII block shift in Legacy mode.
   static String toDevanagari(String text) {
+    if (text.trim().isEmpty) return text;
+    if (activeMode == NormalizerMode.legacyRuleBased) {
+      return _legacyToDevanagari(text);
+    }
+    final script = detectScript(text);
+    if (script == ScriptType.devanagari || script == ScriptType.latin || script == ScriptType.unknown) {
+      return text;
+    }
+    return PhonologicalTransliterationMatrix.toDevanagariPhonological(text, script);
+  }
+
+  /// Legacy ISCII block offset conversion (retained for backward compatibility).
+  static String _legacyToDevanagari(String text) {
     if (text.trim().isEmpty) return text;
     final sb = StringBuffer();
 
     for (int i = 0; i < text.length; i++) {
       final code = text.codeUnitAt(i);
-      // If already Devanagari or ASCII, keep as-is
       if (code < 0x0980 || code > 0x0D7F) {
         sb.writeCharCode(code);
         continue;
       }
 
-      // Check which Indic block this belongs to
       int? base;
       if (code >= 0x0980 && code <= 0x09FF) {
         base = 0x0980; // Bengali
@@ -332,8 +352,19 @@ class ScriptNormalizationEngine {
     return sb.toString();
   }
 
-  /// Converts Devanagari text to a specific target Indic script via Unicode block shift.
+  /// Converts Devanagari text to a specific target Indic script.
+  /// Uses PhonologicalTransliterationMatrix with authentic consonant collapsing in Advanced mode,
+  /// or legacy block shift in Legacy mode.
   static String fromDevanagariToIndic(String text, ScriptType targetScript) {
+    if (text.trim().isEmpty) return text;
+    if (activeMode == NormalizerMode.legacyRuleBased) {
+      return _legacyFromDevanagariToIndic(text, targetScript);
+    }
+    return PhonologicalTransliterationMatrix.fromDevanagariPhonological(text, targetScript);
+  }
+
+  /// Legacy ISCII block offset conversion to target script.
+  static String _legacyFromDevanagariToIndic(String text, ScriptType targetScript) {
     final targetBase = targetScript.unicodeBase;
     if (targetBase == null || targetScript == ScriptType.devanagari) {
       return text;
@@ -356,16 +387,30 @@ class ScriptNormalizationEngine {
   /// Universal transliteration from any Indic script (or Devanagari) to Latin.
   static String toLatin(String input) {
     if (input.trim().isEmpty) return input;
+    if (activeMode == NormalizerMode.legacyRuleBased) {
+      return _legacyToLatin(input);
+    }
 
-    // 1. Convert to canonical Devanagari representation first
-    String devaText = toDevanagari(input);
+    // 1. High-speed whole-word tactical lookup first
+    String text = input;
+    for (final entry in _devanagariToEnglishLexicon.entries) {
+      text = text.replaceAll(entry.key, entry.value);
+    }
 
-    // 2. High-speed whole-word tactical lookup
+    final script = detectScript(text);
+    return PhonologicalTransliterationMatrix.toLatinPhonological(text, script).trim().replaceAll(RegExp(r'\s+'), ' ');
+  }
+
+  /// Legacy rule-based transliteration to Latin.
+  static String _legacyToLatin(String input) {
+    if (input.trim().isEmpty) return input;
+
+    String devaText = _legacyToDevanagari(input);
+
     for (final entry in _devanagariToEnglishLexicon.entries) {
       devaText = devaText.replaceAll(entry.key, entry.value);
     }
 
-    // 3. Phonetic character-by-character translation
     final sb = StringBuffer();
     for (int i = 0; i < devaText.length; i++) {
       final char = devaText[i];

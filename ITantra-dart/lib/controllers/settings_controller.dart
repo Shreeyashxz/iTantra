@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import '../data/app_database.dart';
 import '../data/entities/user_settings_entity.dart';
 import '../speech/language_pack_manager.dart';
+import '../speech/script_normalization_engine.dart';
 import '../speech/sherpa_onnx_speech_engine.dart';
 
 class SettingsController extends ChangeNotifier {
