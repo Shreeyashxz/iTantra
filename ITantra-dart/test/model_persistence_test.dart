@@ -32,7 +32,7 @@ void main() {
       } catch (_) {}
     });
 
-    test('Obsolete Zipformer cleanup removes only obsolete files and preserves IndicConformer', () async {
+    test('Obsolete legacy STT model cleanup removes only obsolete files and preserves IndicConformer', () async {
       final sttDir = Directory(p.join(tempDir.path, 'stt'));
       await sttDir.create(recursive: true);
 
@@ -42,7 +42,7 @@ void main() {
       final tokensFile = File(p.join(sttDir.path, 'tokens.txt'));
       await tokensFile.writeAsString('tokens_data_sample');
 
-      // Create obsolete zipformer files
+      // Create obsolete legacy STT files
       final oldEncoder = File(p.join(sttDir.path, 'encoder.onnx'));
       await oldEncoder.writeAsString('obsolete_encoder');
       final oldDecoder = File(p.join(sttDir.path, 'decoder.onnx'));

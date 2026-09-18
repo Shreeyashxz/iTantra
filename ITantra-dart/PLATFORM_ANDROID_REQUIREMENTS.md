@@ -37,8 +37,8 @@
 ### 2.3 Speech-to-Text (STT)
 - **Engine:** `sherpa_onnx` (`SherpaOnnxSpeechEngine`).
 - **Android Execution:** Native C++ core compiled as Android `.so` shared libraries (`libsherpa-onnx.so`, `libonnxruntime.so`) loaded automatically via Android JNI.
-- **Models:** AI4Bharat IndicConformer INT8 NeMo CTC and Streaming Zipformer.
-- **Dynamic Real-Time Live Detection:** Continuous 700ms buffer decoding running asynchronously, updating text on-screen as words are spoken.
+- **Models:** AI4Bharat IndicConformer INT8 NeMo CTC.
+- **Decoding:** Offline CTC decoding on audio completion for high accuracy across Indian languages.
 - **Script Adaptation:** `IndicScriptTransliterator` providing real-time phonetic transliteration to English (Latin) or native Indian scripts (Devanagari, Marathi, etc.).
 
 ### 2.4 Text-to-Speech (TTS)

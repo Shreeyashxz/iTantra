@@ -504,7 +504,7 @@ class LanguagePackManager {
       await sttDir.create(recursive: true);
     }
 
-    // Clean out only obsolete Zipformer files if present, without deleting the entire directory
+    // Clean out only obsolete legacy STT files if present, without deleting the entire directory
     for (final obsolete in ['encoder.onnx', 'decoder.onnx', 'joiner.onnx']) {
       final f = File(p.join(sttDir.path, obsolete));
       if (await f.exists()) {

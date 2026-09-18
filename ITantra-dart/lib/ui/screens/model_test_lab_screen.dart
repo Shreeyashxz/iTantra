@@ -1065,8 +1065,6 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
       activeModelsCount++;
       if (sttVariant == 'IndicConformer FP32') {
         activeRamMb += 550;
-      } else if (sttVariant == 'Zipformer Streaming') {
-        activeRamMb += 120;
       } else {
         activeRamMb += 180;
       }

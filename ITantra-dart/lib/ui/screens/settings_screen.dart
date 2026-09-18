@@ -589,35 +589,33 @@ class SettingsScreen extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 8),
-                    RadioListTile<String>(
-                      title: const Text('Advanced Phonological Matrix (Recommended)'),
-                      subtitle: const Text('Linguistically authentic phoneme mapping across all 10 languages, proper Dravidian consonant collapsing (Tamil/Malayalam), and Neural IndicXlit ready.'),
-                      value: 'ADVANCED',
+                    RadioGroup<String>(
                       groupValue: settings.normalizerMode,
                       onChanged: (val) {
                         if (val != null) settingsController.updateNormalizerMode(val);
                       },
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                    RadioListTile<String>(
-                      title: const Text('Legacy Rule-Based Engine'),
-                      subtitle: const Text('Original ISCII Unicode block offset shift heuristic and basic lexicon.'),
-                      value: 'LEGACY_RULE_BASED',
-                      groupValue: settings.normalizerMode,
-                      onChanged: (val) {
-                        if (val != null) settingsController.updateNormalizerMode(val);
-                      },
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                    RadioListTile<String>(
-                      title: const Text('Neural IndicXlit (AI4Bharat Aksharantar)'),
-                      subtitle: const Text('Transformer-based neural seq2seq transliteration model (~35 MB ONNX) for contextual loanwords and script prediction.'),
-                      value: 'NEURAL_INDIC_XLIT',
-                      groupValue: settings.normalizerMode,
-                      onChanged: (val) {
-                        if (val != null) settingsController.updateNormalizerMode(val);
-                      },
-                      contentPadding: EdgeInsets.zero,
+                      child: Column(
+                        children: [
+                          RadioListTile<String>(
+                            title: const Text('Advanced Phonological Matrix (Recommended)'),
+                            subtitle: const Text('Linguistically authentic phoneme mapping across all 10 languages, proper Dravidian consonant collapsing (Tamil/Malayalam), and Neural IndicXlit ready.'),
+                            value: 'ADVANCED',
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                          RadioListTile<String>(
+                            title: const Text('Legacy Rule-Based Engine'),
+                            subtitle: const Text('Original ISCII Unicode block offset shift heuristic and basic lexicon.'),
+                            value: 'LEGACY_RULE_BASED',
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                          RadioListTile<String>(
+                            title: const Text('Neural IndicXlit (AI4Bharat Aksharantar)'),
+                            subtitle: const Text('Transformer-based neural seq2seq transliteration model (~35 MB ONNX) for contextual loanwords and script prediction.'),
+                            value: 'NEURAL_INDIC_XLIT',
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ],
+                      ),
                     ),
                     Padding(
                       padding: const EdgeInsets.only(top: 4, bottom: 6),
@@ -652,7 +650,7 @@ class SettingsScreen extends StatelessWidget {
                     Text('• VAD Engine: Silero VAD (~629 KB on disk)',
                         style: theme.textTheme.bodySmall),
                     const SizedBox(height: 4),
-                    Text('• STT Engine: Sherpa-ONNX Zipformer (INT8 quantized)',
+                    Text('• STT Engine: AI4Bharat IndicConformer (INT8 quantized)',
                         style: theme.textTheme.bodySmall),
                     const SizedBox(height: 4),
                     Text('• TTS Engine: Piper / VITS Multilingual Checkpoints',

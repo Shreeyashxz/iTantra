@@ -21,7 +21,7 @@ class IndicScriptTransliterator {
 
 /// Real on-device and hybrid speech engine.
 /// Provides:
-///   STT — Real-time dynamic live decoding supporting AI4Bharat IndicConformer & Zipformer
+///   STT — Offline neural speech recognition supporting AI4Bharat IndicConformer (NeMo CTC)
 ///         with English Latin transliteration & native script output.
 ///   TTS — Studio-grade multi-language neural synthesis with distinct Male / Female voices.
 class SherpaOnnxSpeechEngine implements SpeechEngine {
@@ -29,8 +29,6 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
   final AudioPlayer _audioPlayer = AudioPlayer();
 
   // --- STT ---
-  sherpa.OnlineRecognizer? _onlineRecognizer;
-  sherpa.OnlineStream? _onlineStream;
   sherpa.OfflineRecognizer? _offlineRecognizer;
   bool _isIndicConformer = false;
   String? _loadedSttVariant;
@@ -38,8 +36,6 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
 
   StreamController<String>? _sttTextController;
   bool _isListening = false;
-  Timer? _dynamicDecodeTimer;
-  String _lastSttText = '';
   String _currentLanguage = 'hi';
 
   // --- TTS ---
@@ -55,12 +51,12 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
   }
 
   // ==========================================
-  // STT (Speech-to-Text) — AI4Bharat IndicConformer / Zipformer
+  // STT (Speech-to-Text) — AI4Bharat IndicConformer
   // ==========================================
 
   /// Initialize the STT recognizer from downloaded model files.
   Future<bool> initStt([String precision = 'INT8']) async {
-    if (_offlineRecognizer != null || _onlineRecognizer != null) return true;
+    if (_offlineRecognizer != null) return true;
 
     // Prevent Windows 11 system32 DLL hijacking by pre-loading bundled onnxruntime.dll
     if (Platform.isWindows) {
@@ -79,9 +75,6 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
 
       final indicInt8 = p.join(sttDir, 'indic_conformer.onnx');
       final indicFp32 = p.join(sttDir, 'indic_conformer_fp32.onnx');
-      final encoder = p.join(sttDir, 'encoder.onnx');
-      final decoder = p.join(sttDir, 'decoder.onnx');
-      final joiner = p.join(sttDir, 'joiner.onnx');
       final tokens = p.join(sttDir, 'tokens.txt');
 
       String? chosenIndicModel;
@@ -117,36 +110,12 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
         _loadedSttVariant = isFp32 ? 'IndicConformer FP32' : 'IndicConformer INT8';
         debugPrint('[STT] AI4Bharat IndicConformer (${isFp32 ? "FP32" : "INT8"}) OfflineRecognizer initialized successfully');
         return true;
-      } else if (File(encoder).existsSync() && File(tokens).existsSync()) {
-        debugPrint('[STT] Initializing Streaming Zipformer model...');
-        final config = sherpa.OnlineRecognizerConfig(
-          model: sherpa.OnlineModelConfig(
-            transducer: sherpa.OnlineTransducerModelConfig(
-              encoder: encoder,
-              decoder: File(decoder).existsSync() ? decoder : '',
-              joiner: File(joiner).existsSync() ? joiner : '',
-            ),
-            tokens: tokens,
-            numThreads: 2,
-            debug: false,
-          ),
-          enableEndpoint: true,
-          rule1MinTrailingSilence: 2.0,
-          rule2MinTrailingSilence: 1.0,
-          rule3MinUtteranceLength: 1.5,
-        );
-        _onlineRecognizer = sherpa.OnlineRecognizer(config);
-        _isIndicConformer = false;
-        _loadedSttVariant = 'Zipformer Streaming';
-        debugPrint('[STT] OnlineRecognizer initialized successfully');
-        return true;
       } else {
         debugPrint('[STT] Missing required STT model files in $sttDir');
         return false;
       }
     } catch (e) {
       debugPrint('[STT] Failed to initialize recognizer: $e');
-      _onlineRecognizer = null;
       _offlineRecognizer = null;
       return false;
     }
@@ -158,18 +127,7 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
     _sttTextController?.close();
     _sttTextController = StreamController<String>.broadcast();
     _isListening = true;
-    _lastSttText = '';
     _audioBuffer.clear();
-
-    if (_onlineRecognizer != null) {
-      _onlineStream = _onlineRecognizer!.createStream();
-    }
-
-    // Dynamic real-time transcription timer: runs every 700ms to decode live speech
-    _dynamicDecodeTimer?.cancel();
-    _dynamicDecodeTimer = Timer.periodic(const Duration(milliseconds: 700), (_) {
-      _runDynamicLiveDecode();
-    });
 
     return _sttTextController!.stream;
   }
@@ -178,38 +136,8 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
   void feedAudioData(Int16List samples) {
     if (!_isListening) return;
 
-    // Buffer audio for dynamic and final decoding
+    // Buffer audio for final decoding
     _audioBuffer.addAll(samples);
-
-    // Also feed to online recognizer if active
-    if (_onlineRecognizer != null && _onlineStream != null) {
-      final floatSamples = Float32List(samples.length);
-      for (int i = 0; i < samples.length; i++) {
-        floatSamples[i] = samples[i] / 32768.0;
-      }
-      _onlineStream!.acceptWaveform(samples: floatSamples, sampleRate: 16000);
-    }
-  }
-
-  /// Performs live dynamic partial transcription as the user speaks.
-  /// Note: Only online streaming models (Zipformer) decode incrementally during recording.
-  /// Offline IndicConformer executes its complete CTC pass on audio completion to prevent UI thread freezing.
-  void _runDynamicLiveDecode() {
-    if (!_isListening) return;
-
-    if (_onlineRecognizer != null && _onlineStream != null) {
-      try {
-        while (_onlineRecognizer!.isReady(_onlineStream!)) {
-          _onlineRecognizer!.decode(_onlineStream!);
-        }
-        final result = _onlineRecognizer!.getResult(_onlineStream!).text.trim();
-        if (result.isNotEmpty && result != _lastSttText) {
-          _lastSttText = result;
-          final processed = ScriptNormalizationEngine.normalizeFromStt(result, _currentLanguage);
-          _sttTextController?.add(processed);
-        }
-      } catch (_) {}
-    }
   }
 
   /// Ingests pre-formed transcribed text into the active listening stream.
@@ -224,10 +152,7 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
     final lang = languageCode ?? _currentLanguage;
     String finalTranscript = '';
 
-    _dynamicDecodeTimer?.cancel();
-    _dynamicDecodeTimer = null;
-
-    // 1. Process buffered audio with AI4Bharat IndicConformer
+    // Process buffered audio with AI4Bharat IndicConformer
     if (_isIndicConformer && _offlineRecognizer != null && _audioBuffer.isNotEmpty) {
       try {
         debugPrint('[STT] Final decoding ${_audioBuffer.length} samples with AI4Bharat IndicConformer for [$lang]...');
@@ -246,7 +171,6 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
 
         if (rawResult.isNotEmpty) {
           finalTranscript = ScriptNormalizationEngine.normalizeFromStt(rawResult, lang);
-          _lastSttText = finalTranscript;
           _sttTextController?.add(finalTranscript);
         }
       } catch (e) {
@@ -254,31 +178,10 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
       }
     }
 
-    // 2. Process online stream final tokens
-    if (_onlineStream != null && _onlineRecognizer != null) {
-      try {
-        _onlineStream!.inputFinished();
-        while (_onlineRecognizer!.isReady(_onlineStream!)) {
-          _onlineRecognizer!.decode(_onlineStream!);
-        }
-        final finalResult = _onlineRecognizer!.getResult(_onlineStream!).text.trim();
-        if (finalResult.isNotEmpty) {
-          finalTranscript = ScriptNormalizationEngine.normalizeFromStt(finalResult, lang);
-          _lastSttText = finalTranscript;
-          _sttTextController?.add(finalTranscript);
-        }
-      } catch (e) {
-        debugPrint('[STT] Error finishing input stream: $e');
-      }
-    }
-
     _isListening = false;
-    _onlineStream?.free();
-    _onlineStream = null;
     _audioBuffer.clear();
     _sttTextController?.close();
     _sttTextController = null;
-    _lastSttText = '';
 
     return finalTranscript;
   }
@@ -669,23 +572,13 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
   }
 
   @override
-  bool get isSttLoaded => _offlineRecognizer != null || _onlineRecognizer != null;
+  bool get isSttLoaded => _offlineRecognizer != null;
 
   @override
   String? get loadedSttVariant => _loadedSttVariant;
 
   @override
   void unloadStt() {
-    _dynamicDecodeTimer?.cancel();
-    _dynamicDecodeTimer = null;
-    try {
-      _onlineStream?.free();
-    } catch (_) {}
-    _onlineStream = null;
-    try {
-      _onlineRecognizer?.free();
-    } catch (_) {}
-    _onlineRecognizer = null;
     try {
       _offlineRecognizer?.free();
     } catch (_) {}
