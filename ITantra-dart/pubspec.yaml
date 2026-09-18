@@ -46,6 +46,7 @@ dependencies:
   http: ^1.6.0
   crypto: ^3.0.7
   sherpa_onnx: ^1.13.7
+  flutter_onnxruntime: ^1.8.5
   flutter_tts: ^4.2.5
 
 dev_dependencies:

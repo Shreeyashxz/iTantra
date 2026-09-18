@@ -64,7 +64,7 @@ class CommPipeline {
 
     final audioStream = await audioRecorder.startRecording();
     final vadStream = vadEngine.startVad(audioStream);
-    final textStream = speechEngine.startListening();
+    final textStream = speechEngine.startListening(languageCode);
 
     bool isSpeechActive = false;
 
@@ -131,7 +131,7 @@ class CommPipeline {
     vadEngine.stopVad();
 
     // Transcribe final buffer using IndicConformer
-    final transcript = await speechEngine.stopListeningAndTranscribe();
+    final transcript = await speechEngine.stopListeningAndTranscribe(_currentLanguageCode);
     String normalizedTranscript = '';
     if (transcript.isNotEmpty && _currentSenderId != null && _currentLanguageCode != null) {
       normalizedTranscript = ScriptNormalizationEngine.normalizeFromStt(transcript, _currentLanguageCode!);
@@ -191,7 +191,7 @@ class CommPipeline {
         if (!_hasActiveUtterance) {
           _hasActiveUtterance = true;
           _isTransmitting = true;
-          speechEngine.startListening();
+          speechEngine.startListening(languageCode);
           for (final frame in vadEngine.lookbackBuffer) {
             speechEngine.feedAudioData(frame);
           }
@@ -203,7 +203,7 @@ class CommPipeline {
             _hasActiveUtterance = false;
             _isTransmitting = false;
 
-            final transcript = await speechEngine.stopListeningAndTranscribe();
+            final transcript = await speechEngine.stopListeningAndTranscribe(_currentLanguageCode);
             if (transcript.trim().isNotEmpty && _currentSenderId != null && _currentLanguageCode != null) {
               final normalized = ScriptNormalizationEngine.normalizeFromStt(transcript, _currentLanguageCode!);
               _onTranscriptCallback?.call(normalized);
@@ -250,5 +250,9 @@ class CommPipeline {
   void dispose() {
     stopTransmission();
     stopVadAutoMode();
+    _sttSubscription?.cancel();
+    _sttSubscription = null;
+    _onTranscriptCallback = null;
+    _onVoiceDetectedCallback = null;
   }
 }

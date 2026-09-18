@@ -306,8 +306,11 @@ class ScriptNormalizationEngine {
       return _legacyToDevanagari(text);
     }
     final script = detectScript(text);
-    if (script == ScriptType.devanagari || script == ScriptType.latin || script == ScriptType.unknown) {
+    if (script == ScriptType.devanagari || script == ScriptType.unknown) {
       return text;
+    }
+    if (script == ScriptType.latin) {
+      return toDevanagariFromLatin(text);
     }
     if (activeMode == NormalizerMode.neuralIndicXlit) {
       return IndicXlitEngine.instance.toDevanagari(text, script);
@@ -436,8 +439,13 @@ class ScriptNormalizationEngine {
   }
 
   /// Transliterates Romanized / Latin text to Devanagari phonetically.
+  /// Uses IndicXlitEngine in Neural and Advanced modes with genuine syllabification and Aksharantar loanwords.
   static String toDevanagariFromLatin(String input) {
     if (input.trim().isEmpty) return input;
+    if (activeMode == NormalizerMode.neuralIndicXlit || activeMode == NormalizerMode.advanced) {
+      return IndicXlitEngine.instance.toDevanagariFromLatin(input);
+    }
+
     String text = input.trim();
 
     // 1. Exact tactical word matching

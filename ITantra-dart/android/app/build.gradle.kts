@@ -37,6 +37,13 @@ android {
             )
         }
     }
+
+    packaging {
+        resources {
+            pickFirsts += "**/libonnxruntime.so"
+            pickFirsts += "**/libc++_shared.so"
+        }
+    }
 }
 
 kotlin {

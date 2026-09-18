@@ -15,7 +15,7 @@ class PeerDiscoveryScreen extends StatefulWidget {
 class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
   final TextEditingController _customIpController = TextEditingController();
   final TextEditingController _customPortController = TextEditingController(text: '8888');
-  int _selectedTransportMode = 0; // 0 = Wi-Fi Direct P2P, 1 = Wi-Fi Mesh / Hotspot
+  int _selectedTransportMode = 0; // 0 = Wi-Fi Direct P2P, 1 = Wi-Fi Mesh / Hotspot, 2 = BLE Fallback
 
   @override
   void initState() {
@@ -113,6 +113,85 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
                 },
                 child: const Text('Try Alternative Port'),
               ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
+  void _showBleLoopbackTestDialog(BuildContext context, PeerController controller) async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const Center(
+        child: Card(
+          child: Padding(
+            padding: EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(height: 14),
+                Text('Testing BLE 180B Chunking Loopback...', style: TextStyle(fontWeight: FontWeight.bold)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final res = await controller.testBleLoopback();
+    if (context.mounted) {
+      Navigator.pop(context);
+      final ok = res['success'] as bool? ?? false;
+      final msg = res['message'] as String? ?? '';
+      final chunks = res['chunks'] as int? ?? 0;
+      final bytes = res['bytes'] as int? ?? 0;
+
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Row(
+            children: [
+              Icon(
+                ok ? Icons.check_circle_rounded : Icons.error_rounded,
+                color: ok ? Colors.green : Colors.red,
+              ),
+              const SizedBox(width: 8),
+              Text(ok ? 'BLE Pipeline Verified' : 'BLE Test Failed'),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                ok
+                    ? 'ELI-5: Successfully chunked a payload into $chunks chunks ($bytes bytes with 4-byte sequencing headers), transmitted through the reassembly engine, and verified 100% payload integrity!'
+                    : 'Diagnostic failure: $msg',
+                style: const TextStyle(fontSize: 13, height: 1.4),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: (ok ? Colors.green : Colors.red).withAlpha(25),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: (ok ? Colors.green : Colors.red).withAlpha(60)),
+                ),
+                child: Text(
+                  '⚡ Chunks: $chunks\n📦 Total Bytes: $bytes\n⏱️ Result: $msg',
+                  style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+                ),
+              ),
+            ],
+          ),
+          actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx),
               child: const Text('OK'),
@@ -302,8 +381,10 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
             onPressed: () {
               if (_selectedTransportMode == 0) {
                 controller.startP2pDiscovery();
-              } else {
+              } else if (_selectedTransportMode == 1) {
                 controller.refreshNetwork();
+              } else {
+                controller.startBleScanning();
               }
             },
           ),
@@ -320,12 +401,17 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
                 ButtonSegment(
                   value: 0,
                   icon: Icon(Icons.devices_rounded),
-                  label: Text('Wi-Fi Direct P2P'),
+                  label: Text('Wi-Fi Direct'),
                 ),
                 ButtonSegment(
                   value: 1,
                   icon: Icon(Icons.hub_rounded),
                   label: Text('Wi-Fi Mesh / LAN'),
+                ),
+                ButtonSegment(
+                  value: 2,
+                  icon: Icon(Icons.bluetooth_audio_rounded),
+                  label: Text('BLE Fallback'),
                 ),
               ],
               selected: {_selectedTransportMode},
@@ -508,7 +594,7 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
                     );
                   },
                 ),
-            ] else ...[
+            ] else if (_selectedTransportMode == 1) ...[
               // ==========================================
               // WI-FI MESH / HOTSPOT (LAN Transport)
               // ==========================================
@@ -1007,8 +1093,396 @@ class _PeerDiscoveryScreenState extends State<PeerDiscoveryScreen> {
                 },
               ),
             ],
+          ] else ...[
+              // ==========================================
+              // BLUETOOTH LOW ENERGY (BLE Fallback Radio)
+              // ==========================================
+
+              // BLE Radio Diagnostics & Status Card
+              Card(
+                color: controller.isBleConnected
+                    ? const Color(0xFF1B5E20).withAlpha(35)
+                    : theme.colorScheme.surfaceContainerHighest,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  side: BorderSide(
+                    color: controller.isBleConnected
+                        ? Colors.green
+                        : theme.colorScheme.outlineVariant,
+                  ),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(
+                                controller.isBleConnected
+                                    ? Icons.bluetooth_connected_rounded
+                                    : (controller.isBleScanning
+                                        ? Icons.bluetooth_searching_rounded
+                                        : (controller.isBleAdvertising
+                                            ? Icons.bluetooth_audio_rounded
+                                            : Icons.bluetooth_rounded)),
+                                color: controller.isBleConnected
+                                    ? Colors.green
+                                    : theme.colorScheme.primary,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                'BLE Fallback Transport',
+                                style: theme.textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                  color: controller.isBleConnected ? Colors.green.shade800 : null,
+                                ),
+                              ),
+                            ],
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: controller.isBleConnected
+                                  ? Colors.green
+                                  : (controller.isBleAdvertising || controller.isBleScanning
+                                      ? theme.colorScheme.primaryContainer
+                                      : theme.colorScheme.surfaceContainerHigh),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              controller.isBleConnected
+                                  ? 'LINK ESTABLISHED'
+                                  : (controller.isBleAdvertising
+                                      ? 'ADVERTISING (GATT)'
+                                      : (controller.isBleScanning
+                                          ? 'SCANNING'
+                                          : 'STANDBY')),
+                              style: TextStyle(
+                                color: controller.isBleConnected
+                                    ? Colors.white
+                                    : (controller.isBleAdvertising || controller.isBleScanning
+                                        ? theme.colorScheme.onPrimaryContainer
+                                        : theme.colorScheme.onSurfaceVariant),
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+
+                      // Badges / Metrics
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 6,
+                        children: [
+                          Chip(
+                            avatar: Icon(
+                              Icons.cell_tower_rounded,
+                              size: 16,
+                              color: controller.isBleAdvertising ? Colors.green : Colors.grey,
+                            ),
+                            label: Text(
+                              'GATT Server: ${controller.isBleAdvertising ? "Broadcasting" : "Idle"}',
+                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                            ),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          Chip(
+                            avatar: Icon(
+                              Icons.radar_rounded,
+                              size: 16,
+                              color: controller.isBleScanning ? Colors.blue : Colors.grey,
+                            ),
+                            label: Text(
+                              'Scanner: ${controller.isBleScanning ? "Active" : "Idle"}',
+                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                            ),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          Chip(
+                            avatar: const Icon(Icons.swap_horiz_rounded, size: 16, color: Colors.teal),
+                            label: Text(
+                              'Packets: Tx ${controller.blePacketsSent} / Rx ${controller.blePacketsReceived}',
+                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                            ),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          Chip(
+                            avatar: const Icon(Icons.grain_rounded, size: 16, color: Colors.indigo),
+                            label: Text(
+                              '180B Chunks: Tx ${controller.bleChunksSent} / Rx ${controller.bleChunksReceived}',
+                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                            ),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+
+                      // Explanatory Info Box
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.surface.withAlpha(160),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: theme.colorScheme.outlineVariant.withAlpha(100)),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('💡', style: TextStyle(fontSize: 18)),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'ELI-5: BLE is your disaster fallback! When Wi-Fi routers and LANs are completely unavailable or down, '
+                                'iTantra slices voice and text packets into 180-byte chunks and transmits them directly over native Bluetooth Low Energy radio.',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                  height: 1.4,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      if (controller.isBleConnected) ...[
+                        const Divider(height: 24),
+                        Row(
+                          children: [
+                            const Icon(Icons.check_circle_rounded, color: Colors.green, size: 20),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Connected to: ${controller.bleConnectedPeerName ?? "Unknown Peer"}',
+                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                                  ),
+                                  if (controller.bleConnectedPeerAddress != null)
+                                    Text(
+                                      'Address: ${controller.bleConnectedPeerAddress}',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontFamily: 'monospace',
+                                        color: theme.colorScheme.onSurfaceVariant,
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                            TextButton.icon(
+                              onPressed: () => controller.disconnectBle(),
+                              icon: const Icon(Icons.link_off_rounded, color: Colors.red, size: 18),
+                              label: const Text('DISCONNECT', style: TextStyle(color: Colors.red, fontSize: 12)),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+
+              if (!controller.isBleSupported) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.withAlpha(25),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.amber.shade700.withAlpha(120)),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.info_outline_rounded, color: Colors.amber.shade800),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'ELI-5: Native Bluetooth GATT Server/Client runs on Android mobile hardware. On Windows/Desktop, you can test the 180-byte chunk fragmentation & reassembly pipeline using "TEST LOOPBACK" or "SIMULATE PEER" below!',
+                          style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+
+              const SizedBox(height: 16),
+
+              // BLE Action Control Buttons
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      if (controller.isBleAdvertising) {
+                        controller.stopBleAdvertising();
+                      } else {
+                        controller.startBleAdvertising();
+                      }
+                    },
+                    icon: Icon(
+                      controller.isBleAdvertising ? Icons.stop_rounded : Icons.cell_tower_rounded,
+                      color: controller.isBleAdvertising ? Colors.red : null,
+                    ),
+                    label: Text(controller.isBleAdvertising ? 'Stop Advertising' : 'Advertise (GATT Server)'),
+                  ),
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      if (controller.isBleScanning) {
+                        controller.stopBleScanning();
+                      } else {
+                        controller.startBleScanning();
+                      }
+                    },
+                    icon: Icon(
+                      controller.isBleScanning ? Icons.stop_rounded : Icons.search_rounded,
+                      color: controller.isBleScanning ? Colors.red : null,
+                    ),
+                    label: Text(controller.isBleScanning ? 'Stop Scan' : 'Scan for Peers'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: () => _showBleLoopbackTestDialog(context, controller),
+                    icon: const Icon(Icons.sync_alt_rounded),
+                    label: const Text('Test Loopback (180B Chunking)'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: () {
+                      controller.simulateBlePeer();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Simulated BLE peer connected and ready for field testing.'),
+                          backgroundColor: Colors.teal,
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.developer_board_rounded),
+                    label: const Text('Simulate Peer'),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 20),
+
+              // Discovered Peers Header
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Discovered BLE Devices (${controller.bleDiscoveredPeers.length})',
+                    style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                  Text(
+                    controller.isBleScanning ? 'Scanning...' : (controller.isBleAdvertising ? 'Broadcasting' : 'Idle'),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: controller.isBleScanning || controller.isBleAdvertising ? Colors.green : theme.colorScheme.outline,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+
+              if (controller.bleDiscoveredPeers.isEmpty) ...[
+                Container(
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: theme.colorScheme.outlineVariant),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(
+                    children: [
+                      Icon(
+                        Icons.bluetooth_searching_rounded,
+                        size: 48,
+                        color: theme.colorScheme.primary.withAlpha(160),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        'No BLE iTantra nodes detected nearby.',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        '• To link two phones: Have one phone tap "Advertise (GATT Server)" and the second phone tap "Scan for Peers".\n'
+                        '• Devices will negotiate 180-byte MTU chunking and establish a direct low-energy transceiver link.\n'
+                        '• You can also tap "Simulate Peer" to test sending and receiving audio over BLE immediately.',
+                        textAlign: TextAlign.start,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                          height: 1.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ] else ...[
+                ListView.separated(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: controller.bleDiscoveredPeers.length,
+                  separatorBuilder: (context, index) => const SizedBox(height: 8),
+                  itemBuilder: (context, index) {
+                    final peer = controller.bleDiscoveredPeers[index];
+                    final isPeerConnected = controller.isBleConnected && controller.bleConnectedPeerAddress == peer.address;
+
+                    return Card(
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        side: BorderSide(
+                          color: isPeerConnected ? Colors.green : theme.colorScheme.outlineVariant,
+                        ),
+                      ),
+                      child: ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor: isPeerConnected
+                              ? Colors.green.withAlpha(40)
+                              : theme.colorScheme.primaryContainer,
+                          child: Icon(
+                            Icons.bluetooth_audio_rounded,
+                            color: isPeerConnected ? Colors.green : theme.colorScheme.onPrimaryContainer,
+                          ),
+                        ),
+                        title: Text(
+                          peer.name,
+                          style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+                        ),
+                        subtitle: Text(
+                          '${peer.address} • RSSI: ${peer.rssi} dBm (${peer.signalBars}/4 bars)',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            fontFamily: 'monospace',
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                        trailing: isPeerConnected
+                            ? const Chip(
+                                label: Text('LINKED', style: TextStyle(fontSize: 10, color: Colors.green)),
+                                visualDensity: VisualDensity.compact,
+                                side: BorderSide(color: Colors.green),
+                              )
+                            : ElevatedButton(
+                                onPressed: () => controller.connectBlePeer(peer.address, peer.name),
+                                child: const Text('Connect'),
+                              ),
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ],
           ],
-        ],
       ),
     ),
   );

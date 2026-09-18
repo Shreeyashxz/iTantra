@@ -26,8 +26,15 @@ class AudioRecorderService {
         _isRecording = true;
         _recordSubscription?.cancel();
         _recordSubscription = stream.listen((byteChunk) {
+          final alignedLength = byteChunk.length - (byteChunk.length % 2);
+          if (alignedLength <= 0) return;
+          final uint8List = byteChunk.length == alignedLength
+              ? byteChunk
+              : Uint8List.sublistView(byteChunk, 0, alignedLength);
           final int16List = Int16List.view(
-            Uint8List.fromList(byteChunk).buffer,
+            uint8List.buffer,
+            uint8List.offsetInBytes,
+            alignedLength ~/ 2,
           );
           _pcmStreamController.add(int16List);
         });

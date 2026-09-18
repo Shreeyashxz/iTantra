@@ -67,12 +67,44 @@ class IndicLIDFastTextEngine {
     'हम', 'आप', 'उनको', 'इसका', 'उसका', 'अच्छा', 'बहुत', 'थोड़ा', 'कृपया',
   };
 
-  /// Subword n-grams for Romanized Indic distinction vs. English.
-  static const Set<String> _romanizedIndicMarkers = {
-    'karna', 'karo', 'aahe', 'aaye', 'nahi', 'nahin', 'madat', 'madad', 'jaldi',
-    'pani', 'doctor', 'bhai', 'dada', 'thik', 'haan', 'chahiye', 'pahije', 'aahet',
-    'undhi', 'ledu', 'cheyyandi', 'vanga', 'seri', 'illai', 'irukku', 'venum',
-    'aano', 'illa', 'undu', 'namaskara', 'beku', 'bekilla', 'aagide', 'bhejo',
+  /// Language-specific subword n-grams for Romanized Indic distinction vs. English.
+  static const Map<String, Set<String>> _romanizedMarkersByLang = {
+    'hi': {
+      'karna', 'karo', 'aaye', 'nahi', 'nahin', 'madad', 'jaldi',
+      'pani', 'bhai', 'dada', 'thik', 'haan', 'chahiye', 'kahan',
+      'kaise', 'kya', 'kyun', 'hum', 'aap', 'tum', 'mera', 'apna',
+      'achha', 'sunao', 'bolo', 'ruko', 'chalo', 'bhejo',
+    },
+    'mr': {
+      'aahe', 'aahet', 'madat', 'pahije', 'jhale', 'kasa', 'kay',
+      'namaskar', 'lavkar', 'aamhi', 'tumhi', 'changla', 'thoda',
+      'dyave', 'ghyave', 'aahot',
+    },
+    'ta': {
+      'vanga', 'seri', 'illai', 'irukku', 'venum', 'vanakkam', 'epdi',
+      'irukinga', 'solla', 'thani', 'saptacha', 'nandri', 'aama', 'illaiya',
+    },
+    'te': {
+      'undhi', 'ledu', 'cheyyandi', 'namaskaram', 'ela', 'unnaru',
+      'kavali', 'vaddu', 'neellu', 'enti', 'dhanyavadalu', 'avunu', 'kadu',
+    },
+    'kn': {
+      'beku', 'bekilla', 'aagide', 'namaskara', 'hegiddira', 'illa',
+      'neeru', 'oota', 'dhanyavadagalu', 'haudu', 'madu',
+    },
+    'ml': {
+      'aano', 'undu', 'namaskaram', 'sukhamano', 'venam', 'venda',
+      'vellam', 'nanni', 'athe', 'kazhinjo',
+    },
+    'gu': {
+      'chhe', 'kem', 'nathi', 'aavo', 'namaste', 'aabhar', 'tame', 'aame',
+    },
+    'bn': {
+      'aachhe', 'kemon', 'nei', 'aashun', 'nomoshkar', 'jol', 'dhonyobad', 'hnya',
+    },
+    'or': {
+      'achhi', 'kemiti', 'aasantu', 'namaskar', 'dhanyabad', 'aame',
+    },
   };
 
   /// Checks if the IndicLID-FastText model file exists on disk.
@@ -203,7 +235,7 @@ class IndicLIDFastTextEngine {
         return _discriminateDevanagari(clean);
       case ScriptType.latin:
       case ScriptType.unknown:
-        // 3. Latin script: Discriminate English vs Romanized Indic (Hinglish/Tanglish, etc.)
+        // 3. Latin script: Discriminate English vs Romanized Indic across all 10 languages
         return _discriminateLatin(clean);
     }
   }
@@ -269,26 +301,39 @@ class IndicLIDFastTextEngine {
     }
   }
 
-  /// Discriminate between standard English and Romanized Indic text.
+  /// Discriminate between standard English and Romanized Indic text across all 10 languages.
   LidPrediction _discriminateLatin(String text) {
     final tokens = text.toLowerCase().split(RegExp(r'\s+'));
-    int indicMarkers = 0;
+    final langScores = <String, int>{};
 
     for (final token in tokens) {
       final cleanToken = token.replaceAll(RegExp(r'[^a-z]'), '');
       if (cleanToken.isEmpty) continue;
 
-      if (_romanizedIndicMarkers.contains(cleanToken)) {
-        indicMarkers++;
+      for (final entry in _romanizedMarkersByLang.entries) {
+        if (entry.value.contains(cleanToken)) {
+          langScores[entry.key] = (langScores[entry.key] ?? 0) + 1;
+        }
       }
     }
 
-    if (indicMarkers > 0 && indicMarkers >= tokens.length * 0.25) {
-      // Detected Romanized Indic (e.g. Hinglish)
-      return const LidPrediction(
-        languageCode: 'hi',
-        languageName: 'Hindi (Romanized)',
-        confidence: 0.88,
+    // Find highest scoring Romanized language
+    String? bestLang;
+    int maxScore = 0;
+    for (final entry in langScores.entries) {
+      if (entry.value > maxScore) {
+        maxScore = entry.value;
+        bestLang = entry.key;
+      }
+    }
+
+    // Threshold: at least 1 strong marker or 20% of tokens
+    if (bestLang != null && maxScore > 0) {
+      final langName = languageNames[bestLang] ?? bestLang;
+      return LidPrediction(
+        languageCode: bestLang,
+        languageName: '$langName (Romanized)',
+        confidence: (0.80 + (maxScore / tokens.length) * 0.18).clamp(0.80, 0.98),
         isRomanized: true,
         script: ScriptType.latin,
       );

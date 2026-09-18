@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import '../network/ble_fallback_transport.dart';
 import '../network/transceiver_manager.dart';
 import '../network/wifi_direct_p2p_service.dart';
 import '../network/wifi_mesh_manager.dart';
+import '../proto/transceiver_packet.dart';
 
 class PeerController extends ChangeNotifier {
   final WifiMeshManager meshManager;
@@ -33,6 +35,22 @@ class PeerController extends ChangeNotifier {
   bool get isP2pSupported => p2pService.isSupported;
   bool get isP2pDiscovering => p2pService.isDiscovering;
 
+  // BLE Fallback Transport State
+  BleFallbackTransport get bleTransport => transceiverManager.bleTransport;
+  bool get isBleSupported => bleTransport.isSupported;
+  bool get isBleAdvertising => bleTransport.isAdvertising;
+  bool get isBleScanning => bleTransport.isScanning;
+  bool get isBleConnected => bleTransport.isConnected;
+  String? get bleConnectedPeerName => bleTransport.connectedPeerName;
+  String? get bleConnectedPeerAddress => bleTransport.connectedPeerAddress;
+  List<BleDiscoveredPeer> get bleDiscoveredPeers => bleTransport.discoveredPeers;
+  String get bleStatus => bleTransport.status;
+  int get bleChunksSent => bleTransport.totalChunksSent;
+  int get bleChunksReceived => bleTransport.totalChunksReceived;
+  int get blePacketsSent => bleTransport.totalPacketsSent;
+  int get blePacketsReceived => bleTransport.totalPacketsReassembled;
+  int get blePacketsReassembled => bleTransport.totalPacketsReassembled;
+
   String _connectionStatus = 'Disconnected';
   String get connectionStatus => _connectionStatus;
 
@@ -60,6 +78,9 @@ class PeerController extends ChangeNotifier {
   StreamSubscription<List<WifiP2pPeer>>? _p2pPeersSub;
   StreamSubscription<WifiP2pConnectionInfo>? _p2pConnSub;
   StreamSubscription<String>? _p2pStatusSub;
+
+  StreamSubscription<List<BleDiscoveredPeer>>? _blePeersSub;
+  StreamSubscription<String>? _bleStatusSub;
 
   PeerController({
     required this.meshManager,
@@ -110,6 +131,14 @@ class PeerController extends ChangeNotifier {
 
     _p2pStatusSub = p2pService.statusStream.listen((status) {
       _connectionStatus = status;
+      notifyListeners();
+    });
+
+    _blePeersSub = bleTransport.peersStream.listen((_) {
+      notifyListeners();
+    });
+
+    _bleStatusSub = bleTransport.statusStream.listen((_) {
       notifyListeners();
     });
 
@@ -211,6 +240,60 @@ class PeerController extends ChangeNotifier {
     return success;
   }
 
+  // --- BLE Fallback Methods ---
+  Future<bool> startBleAdvertising([String? name]) async {
+    final ok = await bleTransport.startAdvertising(name);
+    notifyListeners();
+    return ok;
+  }
+
+  Future<bool> stopBleAdvertising() async {
+    final ok = await bleTransport.stopAdvertising();
+    notifyListeners();
+    return ok;
+  }
+
+  Future<bool> startBleScanning() async {
+    final ok = await bleTransport.startScanning();
+    notifyListeners();
+    return ok;
+  }
+
+  Future<bool> stopBleScanning() async {
+    final ok = await bleTransport.stopScanning();
+    notifyListeners();
+    return ok;
+  }
+
+  Future<bool> connectBlePeer(String address, [String? name]) async {
+    final ok = await bleTransport.connectToPeer(address, name);
+    notifyListeners();
+    return ok;
+  }
+
+  Future<void> disconnectBle() async {
+    await bleTransport.disconnect();
+    notifyListeners();
+  }
+
+  void simulateBlePeer([String name = 'Simulated Field Radio', String? address]) {
+    bleTransport.simulatePeerConnected(name, address);
+    notifyListeners();
+  }
+
+  Future<Map<String, dynamic>> testBleLoopback([String testText = 'iTantra Emergency Beacon Loopback Payload']) async {
+    final packet = TransceiverPacket(
+      senderId: deviceId,
+      transcript: testText,
+      languageCode: 'hi',
+      type: PacketType.voice,
+      timestampMs: DateTime.now().millisecondsSinceEpoch,
+    );
+    final res = await bleTransport.testLoopback(packet);
+    notifyListeners();
+    return res;
+  }
+
   void disconnectPeer(String ipAddress) {
     transceiverManager.disconnectPeer(ipAddress);
     notifyListeners();
@@ -219,6 +302,7 @@ class PeerController extends ChangeNotifier {
   void disconnectAll() {
     transceiverManager.stop();
     p2pService.disconnect();
+    disconnectBle();
     notifyListeners();
   }
 
@@ -232,6 +316,8 @@ class PeerController extends ChangeNotifier {
     _p2pPeersSub?.cancel();
     _p2pConnSub?.cancel();
     _p2pStatusSub?.cancel();
+    _blePeersSub?.cancel();
+    _bleStatusSub?.cancel();
     super.dispose();
   }
 }

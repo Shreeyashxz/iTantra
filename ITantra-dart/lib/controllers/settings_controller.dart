@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import '../data/app_database.dart';
 import '../data/entities/user_settings_entity.dart';
 import '../speech/language_pack_manager.dart';
+import '../speech/neural_mt_engine.dart';
 import '../speech/script_normalization_engine.dart';
 import '../speech/sherpa_onnx_speech_engine.dart';
 
@@ -25,6 +26,12 @@ class SettingsController extends ChangeNotifier {
 
   bool _isMtReady = false;
   bool get isMtReady => _isMtReady;
+
+  bool _isMtIndicIndicReady = false;
+  bool get isMtIndicIndicReady => _isMtIndicIndicReady;
+
+  bool _isMtIndicEnReady = false;
+  bool get isMtIndicEnReady => _isMtIndicEnReady;
 
   bool _isMtFp16Ready = false;
   bool get isMtFp16Ready => _isMtFp16Ready;
@@ -86,7 +93,9 @@ class SettingsController extends ChangeNotifier {
   Future<void> checkModelStatus() async {
     _isSttReady = await languagePackManager.isSttAvailable();
     _isSttFp32Ready = await languagePackManager.isSttFp32Available();
-    _isMtReady = await languagePackManager.isMtAvailable();
+    _isMtIndicIndicReady = await languagePackManager.isMtIndicIndicAvailable();
+    _isMtIndicEnReady = await languagePackManager.isMtIndicEnAvailable();
+    _isMtReady = _isMtIndicIndicReady || _isMtIndicEnReady || await languagePackManager.isMtAvailable();
     _isMtFp16Ready = await languagePackManager.isMtFp16Available();
     _isRasa13Ready = await languagePackManager.isRasa13Available();
     _isIndicXlitReady = await languagePackManager.isIndicXlitAvailable();
@@ -94,6 +103,9 @@ class SettingsController extends ChangeNotifier {
     for (final lang in LanguagePackManager.supportedLanguages) {
       _ttsReadyMap[lang.code] = await languagePackManager.isTtsAvailable(lang.code);
       _mmsReadyMap[lang.code] = await languagePackManager.isMmsAvailable(lang.code);
+    }
+    if (_isMtIndicIndicReady || _isMtIndicEnReady) {
+      await NeuralMtEngine.instance.init();
     }
     notifyListeners();
   }
@@ -104,12 +116,31 @@ class SettingsController extends ChangeNotifier {
   }
 
   Future<void> downloadMt() async {
-    await languagePackManager.downloadMt();
-    await checkModelStatus();
+    await downloadMtIndicIndic();
   }
 
   Future<void> deleteMt() async {
     await languagePackManager.deleteMt();
+    await checkModelStatus();
+  }
+
+  Future<void> downloadMtIndicIndic() async {
+    await languagePackManager.downloadMtIndicIndic();
+    await checkModelStatus();
+  }
+
+  Future<void> deleteMtIndicIndic() async {
+    await languagePackManager.deleteMtIndicIndic();
+    await checkModelStatus();
+  }
+
+  Future<void> downloadMtIndicEn() async {
+    await languagePackManager.downloadMtIndicEn();
+    await checkModelStatus();
+  }
+
+  Future<void> deleteMtIndicEn() async {
+    await languagePackManager.deleteMtIndicEn();
     await checkModelStatus();
   }
 

@@ -24,6 +24,29 @@ import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothGatt
+import android.bluetooth.BluetoothGattCallback
+import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattServer
+import android.bluetooth.BluetoothGattServerCallback
+import android.bluetooth.BluetoothGattService
+import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
+import android.bluetooth.le.AdvertiseCallback
+import android.bluetooth.le.AdvertiseData
+import android.bluetooth.le.AdvertiseSettings
+import android.bluetooth.le.BluetoothLeAdvertiser
+import android.bluetooth.le.BluetoothLeScanner
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanFilter
+import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
+import android.os.ParcelUuid
+import java.util.UUID
+import java.util.HashSet
+
 class MainActivity : FlutterActivity() {
 
     companion object {
@@ -42,6 +65,12 @@ class MainActivity : FlutterActivity() {
     private val ALERT_CHANNEL = "com.itantra/hardware_alert"
     private val WIFI_DIRECT_CHANNEL = "com.itantra/wifi_direct"
     private val WIFI_DIRECT_EVENT_CHANNEL = "com.itantra/wifi_direct_events"
+    private val BLE_CHANNEL = "com.itantra/ble"
+    private val BLE_EVENT_CHANNEL = "com.itantra/ble_events"
+
+    private val BLE_SERVICE_UUID = UUID.fromString("0000FE60-0000-1000-8000-00805F9B34FB")
+    private val BLE_CHAR_TX_UUID = UUID.fromString("0000FE61-0000-1000-8000-00805F9B34FB")
+    private val BLE_CHAR_RX_UUID = UUID.fromString("0000FE62-0000-1000-8000-00805F9B34FB")
 
     // Wi-Fi Direct references
     private var wifiP2pManager: WifiP2pManager? = null
@@ -158,6 +187,26 @@ class MainActivity : FlutterActivity() {
                 override fun onCancel(arguments: Any?) {
                     p2pEventSink = null
                     unregisterP2pReceiver()
+                }
+            }
+        )
+
+        // 3. BLE Fallback Platform Channel
+        bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager?
+        bluetoothAdapter = bluetoothManager?.adapter
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, BLE_CHANNEL).setMethodCallHandler { call, result ->
+            handleBleCall(call, result)
+        }
+
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, BLE_EVENT_CHANNEL).setStreamHandler(
+            object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                    bleEventSink = events
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    bleEventSink = null
                 }
             }
         )
@@ -291,8 +340,350 @@ class MainActivity : FlutterActivity() {
         } catch (_: Exception) {}
     }
 
+    // =========================================================================
+    // Bluetooth Low Energy (BLE) Fallback Transport Implementation
+    // =========================================================================
+    private var bleAdvertiser: BluetoothLeAdvertiser? = null
+    private var bleGattServer: BluetoothGattServer? = null
+    private var bleScanner: BluetoothLeScanner? = null
+    private var connectedGattClient: BluetoothGatt? = null
+    private var bleEventSink: EventChannel.EventSink? = null
+    private var isBleAdvertising = false
+    private var isBleScanning = false
+    private var isBleConnected = false
+    private val connectedGattDevices = HashSet<BluetoothDevice>()
+
+    private val bleScanCallback = object : ScanCallback() {
+        @SuppressLint("MissingPermission")
+        override fun onScanResult(callbackType: Int, result: ScanResult?) {
+            val device = result?.device ?: return
+            val name = device.name ?: result.scanRecord?.deviceName ?: "iTantra-Node-${device.address.takeLast(4)}"
+            sendBleEvent("PEER_DISCOVERED", mapOf(
+                "name" to name,
+                "address" to device.address,
+                "rssi" to result.rssi
+            ))
+        }
+
+        override fun onScanFailed(errorCode: Int) {
+            sendBleEvent("SCAN_STATE", mapOf("scanning" to false, "error" to "Scan failed with code: $errorCode"))
+        }
+    }
+
+    private val bleAdvertiseCallback = object : AdvertiseCallback() {
+        override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
+            isBleAdvertising = true
+            sendBleEvent("ADVERTISING_STATE", mapOf("advertising" to true))
+        }
+
+        override fun onStartFailure(errorCode: Int) {
+            isBleAdvertising = false
+            sendBleEvent("ADVERTISING_STATE", mapOf("advertising" to false, "error" to "Advertise failed with code: $errorCode"))
+        }
+    }
+
+    private val bleGattServerCallback = object : BluetoothGattServerCallback() {
+        @SuppressLint("MissingPermission")
+        override fun onConnectionStateChange(device: BluetoothDevice?, status: Int, newState: Int) {
+            if (device == null) return
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                connectedGattDevices.add(device)
+                isBleConnected = true
+                sendBleEvent("CONNECTION_STATE", mapOf(
+                    "connected" to true,
+                    "address" to device.address,
+                    "name" to (device.name ?: "iTantra Remote Node"),
+                    "role" to "SERVER"
+                ))
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                connectedGattDevices.remove(device)
+                if (connectedGattDevices.isEmpty() && connectedGattClient == null) {
+                    isBleConnected = false
+                    sendBleEvent("CONNECTION_STATE", mapOf(
+                        "connected" to false,
+                        "address" to device.address,
+                        "role" to "SERVER"
+                    ))
+                }
+            }
+        }
+
+        @SuppressLint("MissingPermission")
+        override fun onCharacteristicWriteRequest(
+            device: BluetoothDevice?,
+            requestId: Int,
+            characteristic: BluetoothGattCharacteristic?,
+            preparedWrite: Boolean,
+            responseNeeded: Boolean,
+            offset: Int,
+            value: ByteArray?
+        ) {
+            if (responseNeeded && device != null) {
+                bleGattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
+            }
+            if (value != null && value.isNotEmpty()) {
+                sendBleEvent("GATT_CHUNK_RECEIVED", mapOf(
+                    "chunk" to value,
+                    "from" to (device?.address ?: "UNKNOWN")
+                ))
+            }
+        }
+    }
+
+    private val bleGattClientCallback = object : BluetoothGattCallback() {
+        @SuppressLint("MissingPermission")
+        override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
+            if (gatt == null) return
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                gatt.discoverServices()
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                connectedGattClient?.close()
+                connectedGattClient = null
+                isBleConnected = false
+                sendBleEvent("CONNECTION_STATE", mapOf(
+                    "connected" to false,
+                    "address" to gatt.device.address,
+                    "role" to "CLIENT"
+                ))
+            }
+        }
+
+        @SuppressLint("MissingPermission")
+        override fun onServicesDiscovered(gatt: BluetoothGatt?, status: Int) {
+            if (status == BluetoothGatt.GATT_SUCCESS && gatt != null) {
+                val service = gatt.getService(BLE_SERVICE_UUID)
+                val txChar = service?.getCharacteristic(BLE_CHAR_TX_UUID)
+                if (txChar != null) {
+                    gatt.setCharacteristicNotification(txChar, true)
+                }
+                isBleConnected = true
+                sendBleEvent("CONNECTION_STATE", mapOf(
+                    "connected" to true,
+                    "address" to gatt.device.address,
+                    "name" to (gatt.device.name ?: "iTantra Remote Peer"),
+                    "role" to "CLIENT"
+                ))
+            }
+        }
+
+        override fun onCharacteristicChanged(gatt: BluetoothGatt?, characteristic: BluetoothGattCharacteristic?) {
+            @Suppress("DEPRECATION")
+            val value = characteristic?.value
+            if (value != null && value.isNotEmpty()) {
+                sendBleEvent("GATT_CHUNK_RECEIVED", mapOf(
+                    "chunk" to value,
+                    "from" to (gatt?.device?.address ?: "UNKNOWN")
+                ))
+            }
+        }
+    }
+
+    private fun handleBleCall(call: MethodCall, result: MethodChannel.Result) {
+        when (call.method) {
+            "isSupported" -> {
+                result.success(bluetoothAdapter != null)
+            }
+            "startAdvertising" -> {
+                val name = call.argument<String>("name") ?: "iTantra-Node"
+                val ok = startBleAdvertising(name)
+                result.success(ok)
+            }
+            "stopAdvertising" -> {
+                stopBleAdvertising()
+                result.success(true)
+            }
+            "startScanning" -> {
+                val ok = startBleScanning()
+                result.success(ok)
+            }
+            "stopScanning" -> {
+                stopBleScanning()
+                result.success(true)
+            }
+            "connect" -> {
+                val address = call.argument<String>("address")
+                if (address.isNullOrEmpty()) {
+                    result.error("INVALID_ARG", "Address cannot be empty", null)
+                    return
+                }
+                val ok = connectBleGatt(address)
+                result.success(ok)
+            }
+            "disconnect" -> {
+                disconnectBleGatt()
+                result.success(true)
+            }
+            "sendChunk" -> {
+                val chunk = call.argument<ByteArray>("chunk")
+                if (chunk == null || chunk.isEmpty()) {
+                    result.error("INVALID_ARG", "Chunk cannot be empty", null)
+                    return
+                }
+                val ok = sendBleChunk(chunk)
+                result.success(ok)
+            }
+            else -> result.notImplemented()
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun startBleAdvertising(nodeName: String): Boolean {
+        if (bluetoothAdapter == null || !bluetoothAdapter!!.isEnabled) return false
+        bleAdvertiser = bluetoothAdapter?.bluetoothLeAdvertiser ?: return false
+
+        try {
+            if (bleGattServer == null) {
+                bleGattServer = bluetoothManager?.openGattServer(this, bleGattServerCallback)
+                val service = BluetoothGattService(BLE_SERVICE_UUID, BluetoothGattService.SERVICE_TYPE_PRIMARY)
+
+                val txChar = BluetoothGattCharacteristic(
+                    BLE_CHAR_TX_UUID,
+                    BluetoothGattCharacteristic.PROPERTY_READ or BluetoothGattCharacteristic.PROPERTY_NOTIFY,
+                    BluetoothGattCharacteristic.PERMISSION_READ
+                )
+                val rxChar = BluetoothGattCharacteristic(
+                    BLE_CHAR_RX_UUID,
+                    BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE,
+                    BluetoothGattCharacteristic.PERMISSION_WRITE
+                )
+                service.addCharacteristic(txChar)
+                service.addCharacteristic(rxChar)
+                bleGattServer?.addService(service)
+            }
+
+            val settings = AdvertiseSettings.Builder()
+                .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
+                .setConnectable(true)
+                .setTimeout(0)
+                .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
+                .build()
+
+            val data = AdvertiseData.Builder()
+                .setIncludeDeviceName(true)
+                .addServiceUuid(ParcelUuid(BLE_SERVICE_UUID))
+                .build()
+
+            bleAdvertiser?.startAdvertising(settings, data, bleAdvertiseCallback)
+            return true
+        } catch (e: Exception) {
+            sendBleEvent("ADVERTISING_STATE", mapOf("advertising" to false, "error" to (e.localizedMessage ?: "Failed to start advertiser")))
+            return false
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun stopBleAdvertising() {
+        try {
+            bleAdvertiser?.stopAdvertising(bleAdvertiseCallback)
+        } catch (_: Exception) {}
+        isBleAdvertising = false
+        sendBleEvent("ADVERTISING_STATE", mapOf("advertising" to false))
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun startBleScanning(): Boolean {
+        if (bluetoothAdapter == null || !bluetoothAdapter!!.isEnabled) return false
+        bleScanner = bluetoothAdapter?.bluetoothLeScanner ?: return false
+
+        try {
+            val filter = ScanFilter.Builder()
+                .setServiceUuid(ParcelUuid(BLE_SERVICE_UUID))
+                .build()
+
+            val settings = ScanSettings.Builder()
+                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                .build()
+
+            isBleScanning = true
+            bleScanner?.startScan(listOf(filter), settings, bleScanCallback)
+            sendBleEvent("SCAN_STATE", mapOf("scanning" to true))
+            return true
+        } catch (e: Exception) {
+            isBleScanning = false
+            sendBleEvent("SCAN_STATE", mapOf("scanning" to false, "error" to (e.localizedMessage ?: "Failed to start scanner")))
+            return false
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun stopBleScanning() {
+        try {
+            bleScanner?.stopScan(bleScanCallback)
+        } catch (_: Exception) {}
+        isBleScanning = false
+        sendBleEvent("SCAN_STATE", mapOf("scanning" to false))
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun connectBleGatt(address: String): Boolean {
+        if (bluetoothAdapter == null) return false
+        try {
+            val device = bluetoothAdapter?.getRemoteDevice(address) ?: return false
+            connectedGattClient?.close()
+            connectedGattClient = device.connectGatt(this, false, bleGattClientCallback)
+            return true
+        } catch (e: Exception) {
+            return false
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun disconnectBleGatt() {
+        try {
+            connectedGattClient?.disconnect()
+            connectedGattClient?.close()
+            connectedGattClient = null
+            connectedGattDevices.clear()
+            isBleConnected = false
+            sendBleEvent("CONNECTION_STATE", mapOf("connected" to false))
+        } catch (_: Exception) {}
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun sendBleChunk(chunk: ByteArray): Boolean {
+        var sent = false
+        val client = connectedGattClient
+        if (client != null && isBleConnected) {
+            val service = client.getService(BLE_SERVICE_UUID)
+            val rxChar = service?.getCharacteristic(BLE_CHAR_RX_UUID)
+            if (rxChar != null) {
+                rxChar.value = chunk
+                rxChar.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+                client.writeCharacteristic(rxChar)
+                sent = true
+            }
+        }
+        val server = bleGattServer
+        if (server != null && connectedGattDevices.isNotEmpty()) {
+            val service = server.getService(BLE_SERVICE_UUID)
+            val txChar = service?.getCharacteristic(BLE_CHAR_TX_UUID)
+            if (txChar != null) {
+                txChar.value = chunk
+                for (device in connectedGattDevices) {
+                    server.notifyCharacteristicChanged(device, txChar, false)
+                    sent = true
+                }
+            }
+        }
+        return sent
+    }
+
+    private fun sendBleEvent(eventType: String, data: Map<String, Any>) {
+        val payload = HashMap<String, Any>(data)
+        payload["eventType"] = eventType
+        runOnUiThread {
+            bleEventSink?.success(payload)
+        }
+    }
+
     override fun onDestroy() {
         unregisterP2pReceiver()
+        stopBleAdvertising()
+        stopBleScanning()
+        disconnectBleGatt()
+        try {
+            bleGattServer?.close()
+        } catch (_: Exception) {}
         super.onDestroy()
     }
 }

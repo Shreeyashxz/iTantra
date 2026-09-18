@@ -1,12 +1,14 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'indic_bpe_tokenizer.dart';
 import 'indiclid_fasttext_engine.dart';
+import 'neural_mt_engine.dart';
 import 'script_normalization_engine.dart';
 
 /// Neural and disaster-resilient Machine Translation (MT) engine
 /// based on AI4Bharat IndicTrans principles.
 ///
-/// Supports cross-lingual translation across 10 official languages:
+/// Supports cross-lingual translation across all 10 official languages:
 /// Hindi (hi), English (en), Marathi (mr), Gujarati (gu), Tamil (ta),
 /// Telugu (te), Kannada (kn), Malayalam (ml), Bengali (bn), Odia (or).
 class IndicTransEngine {
@@ -39,6 +41,7 @@ class IndicTransEngine {
 
   void unload() {
     _isLoaded = false;
+    NeuralMtEngine.instance.unload();
     debugPrint('[IndicTrans] Translation model offloaded from RAM');
   }
 
@@ -46,16 +49,35 @@ class IndicTransEngine {
     if (!_isLoaded) {
       return 'IndicTrans2 MT (Offloaded / 0 MB RAM)';
     }
+    if (NeuralMtEngine.instance.isReady) {
+      return 'IndicTrans2 Neural ONNX (${NeuralMtEngine.instance.loadedModelName})';
+    }
     return _isQuantizedModelReady
         ? (_loadedPrecision == 'FP16'
-            ? 'IndicTrans2 FP16 Studio (On-Device Model)'
-            : 'IndicTrans2 INT8 (On-Device Quantized)')
-        : 'IndicTrans2 Hybrid (Active / Disaster Lexicon)';
+            ? 'IndicTrans2 FP16 Studio (On-Device Checkpoint)'
+            : 'IndicTrans2 INT8 (On-Device Quantized Checkpoint)')
+        : 'IndicTrans2 Hybrid (Active / Tactical Disaster Lexicon)';
   }
 
-  // Comprehensive disaster, medical, tactical, and emergency lexicon
-  // keyed by universal concept tag -> translation in all 10 languages
+  /// Pure Dart BPE Tokenizer for IndicTrans2
+  IndicBpeTokenizer get tokenizer => IndicBpeTokenizer.instance;
+
+  /// Tokenizes text into BPE token IDs with target language prefix
+  List<int> tokenize(String text, String srcLang, String tgtLang) {
+    return tokenizer.encode(text: text, sourceLang: srcLang, targetLang: tgtLang);
+  }
+
+  /// Detokenizes BPE token IDs back into target text
+  String detokenize(List<int> tokenIds, [String? tgtLang]) {
+    return tokenizer.decode(tokenIds, targetLang: tgtLang);
+  }
+
+  // ===========================================================================
+  // Comprehensive Tactical, Disaster, Medical, and Conversational Lexicon
+  // Across all 10 Supported Languages
+  // ===========================================================================
   static const Map<String, Map<String, String>> conceptLexicon = {
+    // --- Greetings & Acknowledgements ---
     'hello': {
       'en': 'Hello',
       'hi': 'नमस्ते',
@@ -68,6 +90,116 @@ class IndicTransEngine {
       'bn': 'নমস্কার',
       'or': 'ନମସ୍କାର',
     },
+    'thank you': {
+      'en': 'Thank you',
+      'hi': 'धन्यवाद',
+      'mr': 'धन्यवाद',
+      'gu': 'આભાર',
+      'ta': 'நன்றி',
+      'te': 'ధన్యవాదాలు',
+      'kn': 'ಧನ್ಯವಾದಗಳು',
+      'ml': 'നന്ദി',
+      'bn': 'ধন্যবাদ',
+      'or': 'ଧନ୍ୟବାଦ',
+    },
+    'yes': {
+      'en': 'Yes',
+      'hi': 'हाँ',
+      'mr': 'हो',
+      'gu': 'હા',
+      'ta': 'ஆம்',
+      'te': 'అవును',
+      'kn': 'ಹೌದು',
+      'ml': 'അതെ',
+      'bn': 'হ্যাঁ',
+      'or': 'ହଁ',
+    },
+    'no': {
+      'en': 'No',
+      'hi': 'नहीं',
+      'mr': 'नाही',
+      'gu': 'ના',
+      'ta': 'இல்லை',
+      'te': 'కాదు',
+      'kn': 'ಇಲ್ಲ',
+      'ml': 'ഇല്ല',
+      'bn': 'না',
+      'or': 'ନା',
+    },
+    'please': {
+      'en': 'Please',
+      'hi': 'कृपया',
+      'mr': 'कृपया',
+      'gu': 'કૃપા કરીને',
+      'ta': 'தயவுசெய்து',
+      'te': 'దయచేసి',
+      'kn': 'ದಯವಿಟ್ಟು',
+      'ml': 'ദയവായി',
+      'bn': 'দয়া করে',
+      'or': 'ଦୟାକରି',
+    },
+    'understood': {
+      'en': 'Understood',
+      'hi': 'समझ गया',
+      'mr': 'समजले',
+      'gu': 'સમજી ગયા',
+      'ta': 'புரிந்தது',
+      'te': 'అర్థమైంది',
+      'kn': 'ಅರ್ಥವಾಯಿತು',
+      'ml': 'മനസ്സിലായി',
+      'bn': 'বুঝেছি',
+      'or': 'ବୁଝିଲି',
+    },
+    'repeat last message': {
+      'en': 'Repeat last message',
+      'hi': 'अंतिम संदेश दोहराएं',
+      'mr': 'शेवटचा संदेश पुन्हा सांगा',
+      'gu': 'છેલ્લો સંદેશ ફરીથી બોલો',
+      'ta': 'கடைசி செய்தியை மீண்டும் கூறவும்',
+      'te': 'చివరి సందేశాన్ని మళ్లీ చెప్పండి',
+      'kn': 'ಕೊನೆಯ ಸಂದೇಶವನ್ನು ಪುನರಾವರ್ತಿಸಿ',
+      'ml': 'അവസാന സന്ദേശം ആവർത്തിക്കുക',
+      'bn': 'শেষ বার্তাটি পুনরাবৃত্তি করুন',
+      'or': 'ଶେଷ ବାର୍ତ୍ତା ପୁନରାବୃତ୍ତି କରନ୍ତୁ',
+    },
+    'stand by': {
+      'en': 'Stand by',
+      'hi': 'प्रतीक्षा करें',
+      'mr': 'प्रतीक्षा करा',
+      'gu': 'રાહ જુઓ',
+      'ta': 'காத்திருக்கவும்',
+      'te': 'వేచి ఉండండి',
+      'kn': 'ಕಾಯಿರಿ',
+      'ml': 'കാത്തിരിക്കുക',
+      'bn': 'অপেক্ষা করুন',
+      'or': 'ଅପେକ୍ଷା କରନ୍ତୁ',
+    },
+    'all clear': {
+      'en': 'All clear',
+      'hi': 'सब सुरक्षित है',
+      'mr': 'सर्व सुरक्षित आहे',
+      'gu': 'બધું સલામત છે',
+      'ta': 'அனைத்தும் தெளிவு',
+      'te': 'అంతా స్పష్టంగా ఉంది',
+      'kn': 'ಎಲ್ಲವೂ ಸ್ಪಷ್ಟವಾಗಿದೆ',
+      'ml': 'എല്ലാം സുരക്ഷിതമാണ്',
+      'bn': 'সব পরিষ্কার',
+      'or': 'ସବୁ ସୁରକ୍ଷିତ',
+    },
+    'under control': {
+      'en': 'Under control',
+      'hi': 'नियंत्रण में है',
+      'mr': 'नियंत्रणात आहे',
+      'gu': 'નિયંત્રણ હેઠળ છે',
+      'ta': 'கட்டுப்பாட்டில் உள்ளது',
+      'te': 'నియంత్రణలో ఉంది',
+      'kn': 'ನಿಯಂತ್ರಣದಲ್ಲಿದೆ',
+      'ml': 'നിയന്ത്രണത്തിലാണ്',
+      'bn': 'নিয়ন্ত্রণে আছে',
+      'or': 'ନିୟନ୍ତ୍ରଣରେ ଅଛି',
+    },
+
+    // --- Emergency & Danger ---
     'emergency': {
       'en': 'Emergency',
       'hi': 'आपातकाल',
@@ -104,6 +236,92 @@ class IndicTransEngine {
       'bn': 'বিপদ',
       'or': 'ବିପଦ',
     },
+    'safe': {
+      'en': 'Safe',
+      'hi': 'सुरक्षित',
+      'mr': 'सुरक्षित',
+      'gu': 'સલામત',
+      'ta': 'பாதுகாப்பானது',
+      'te': 'సురక్షితం',
+      'kn': 'ಸುರಕ್ಷಿತ',
+      'ml': 'സുരക്ഷിതം',
+      'bn': 'নিরাপদ',
+      'or': 'ସୁରକ୍ଷିତ',
+    },
+    'fire': {
+      'en': 'Fire',
+      'hi': 'आग',
+      'mr': 'आग',
+      'gu': 'આગ',
+      'ta': 'தீ',
+      'te': 'అగ్ని',
+      'kn': 'ಬೆಂಕಿ',
+      'ml': 'തീ',
+      'bn': 'আগুন',
+      'or': 'ନିଆଁ',
+    },
+    'flood': {
+      'en': 'Flood',
+      'hi': 'बाढ़',
+      'mr': 'पूर',
+      'gu': 'પૂર',
+      'ta': 'வெள்ளம்',
+      'te': 'వరద',
+      'kn': 'ಪ್ರವಾಹ',
+      'ml': 'വെള്ളപ്പൊക്കം',
+      'bn': 'বন্যা',
+      'or': 'ବନ୍ୟା',
+    },
+    'earthquake': {
+      'en': 'Earthquake',
+      'hi': 'भूकंप',
+      'mr': 'भूकंप',
+      'gu': 'ધરતીકંપ',
+      'ta': 'நிலநடுக்கம்',
+      'te': 'భూకంపం',
+      'kn': 'ಭೂಕಂಪ',
+      'ml': 'ഭൂകമ്പം',
+      'bn': 'ভূমিকম্প',
+      'or': 'ଭୂମିକମ୍ପ',
+    },
+    'evacuate immediately': {
+      'en': 'Evacuate immediately',
+      'hi': 'तुरंत खाली करें',
+      'mr': 'त्वरित रिकामे करा',
+      'gu': 'તરત જ ખાલી કરો',
+      'ta': 'உடனடியாக வெளியேறவும்',
+      'te': 'వెంటనే ఖాళీ చేయండి',
+      'kn': 'ತಕ್ಷಣ ಖಾಲಿ ಮಾಡಿ',
+      'ml': 'ഉടൻ ഒഴിഞ്ഞുപോകുക',
+      'bn': 'অবিলম্বে খালি করুন',
+      'or': 'ତୁରନ୍ତ ଖାଲି କରନ୍ତୁ',
+    },
+    'we are safe': {
+      'en': 'We are safe',
+      'hi': 'हम सुरक्षित हैं',
+      'mr': 'आम्ही सुरक्षित आहोत',
+      'gu': 'અમે સલામત છીએ',
+      'ta': 'நாங்கள் பாதுகாப்பாக இருக்கிறோம்',
+      'te': 'మేము సురక్షితంగా ఉన్నాము',
+      'kn': 'ನಾವು ಸುರಕ್ಷಿತವಾಗಿದ್ದೇವೆ',
+      'ml': 'ഞങ്ങൾ സുരക്ഷിതരാണ്',
+      'bn': 'আমরা নিরাপদ আছি',
+      'or': 'ଆମେ ସୁରକ୍ଷିତ ଅଛୁ',
+    },
+    'need help immediately': {
+      'en': 'Need help immediately',
+      'hi': 'तुरंत मदद चाहिए',
+      'mr': 'त्वरित मदत हवी आहे',
+      'gu': 'તરત જ મદદની જરૂર છે',
+      'ta': 'உடனடி உதவி தேவை',
+      'te': 'వెంటనే సహాయం కావాలి',
+      'kn': 'ತಕ್ಷಣ ಸಹಾಯ ಬೇಕು',
+      'ml': 'ഉടൻ സഹായം ആവശ്യമാണ്',
+      'bn': 'অবিলম্বে সাহায্য দরকার',
+      'or': 'ତୁରନ୍ତ ସାହାଯ୍ୟ ଆବଶ୍ୟକ',
+    },
+
+    // --- Medical & Casualties ---
     'doctor': {
       'en': 'Doctor',
       'hi': 'डॉक्टर',
@@ -128,6 +346,80 @@ class IndicTransEngine {
       'bn': 'হাসপাতাল',
       'or': 'ଡାକ୍ତରଖାନା',
     },
+    'ambulance': {
+      'en': 'Ambulance',
+      'hi': 'एम्बुलेंस',
+      'mr': 'रुग्णवाहिका',
+      'gu': 'એમ્બ્યુલન્સ',
+      'ta': 'ஆம்புலன்ஸ்',
+      'te': 'అంబులెన్స్',
+      'kn': 'ಆಂಬ್ಯುಲೆನ್ಸ್',
+      'ml': 'ആംബുലൻസ്',
+      'bn': 'অ্যাম্বুলেন্স',
+      'or': 'ଆମ୍ବୁଲାନ୍ସ',
+    },
+    'injured': {
+      'en': 'Injured',
+      'hi': 'घायल',
+      'mr': 'जखमी',
+      'gu': 'ઇજાગ્રસ્ત',
+      'ta': 'காயமடைந்தவர்',
+      'te': 'గాయపడిన',
+      'kn': 'ಗಾಯಗೊಂಡ',
+      'ml': 'പരിക്കേറ്റു',
+      'bn': 'আহত',
+      'or': 'ଆହତ',
+    },
+    'casualties reported': {
+      'en': 'Casualties reported',
+      'hi': 'हताहतों की सूचना है',
+      'mr': 'हताहत झाल्याची माहिती आहे',
+      'gu': 'જાનહાનિના અહેવાલ છે',
+      'ta': 'உயிரிழப்பு தகவல்கள் வந்துள்ளன',
+      'te': 'మరణాలు నమోదయ్యాయి',
+      'kn': 'ಸಾವುನೋವುಗಳು ವರದಿಯಾಗಿವೆ',
+      'ml': 'ആളപായം റിപ്പോർട്ട് ചെയ്തു',
+      'bn': 'হতাহতের খবর পাওয়া গেছে',
+      'or': 'ମୃତାହତଙ୍କ ଖବର ମିଳିଛି',
+    },
+    'first aid': {
+      'en': 'First aid',
+      'hi': 'प्राथमिक उपचार',
+      'mr': 'प्रथमोपचार',
+      'gu': 'પ્રાથમિક સારવાર',
+      'ta': 'முதலுதவி',
+      'te': 'ప్రథమ చికిత్స',
+      'kn': 'ಪ್ರಥಮ ಚಿಕಿತ್ಸೆ',
+      'ml': 'പ്രഥമശുശ്രൂഷ',
+      'bn': 'প্রাথমিক চিকিৎসা',
+      'or': 'ପ୍ରାଥମିକ ଚିକିତ୍ସା',
+    },
+    'oxygen': {
+      'en': 'Oxygen',
+      'hi': 'ऑक्सीजन',
+      'mr': 'ऑक्सिजन',
+      'gu': 'ઓક્સિજન',
+      'ta': 'ஆக்சிஜன்',
+      'te': 'ఆక్సిజన్',
+      'kn': 'ಆಕ್ಸಿಜನ್',
+      'ml': 'ഓക്സിജൻ',
+      'bn': 'অক্সিজেন',
+      'or': 'ଅମ୍ଳଜାନ',
+    },
+    'medicine': {
+      'en': 'Medicine',
+      'hi': 'दवा',
+      'mr': 'औषध',
+      'gu': 'દવા',
+      'ta': 'மருந்து',
+      'te': 'మందు',
+      'kn': 'ಔಷಧಿ',
+      'ml': 'മരുന്ന്',
+      'bn': 'ওষুধ',
+      'or': 'ଔଷଧ',
+    },
+
+    // --- Life Supplies ---
     'water': {
       'en': 'Water',
       'hi': 'पानी',
@@ -152,37 +444,135 @@ class IndicTransEngine {
       'bn': 'খাবার',
       'or': 'ଖାଦ୍ୟ',
     },
-    'medicine': {
-      'en': 'Medicine',
-      'hi': 'दवा',
-      'mr': 'औषध',
-      'gu': 'દવા',
-      'ta': 'மருந்து',
-      'te': 'మందులు',
-      'kn': 'ಔಷಧ',
-      'ml': 'മരുന്ന്',
-      'bn': 'ওষুধ',
-      'or': 'ଔଷଧ',
+    'we need water and food': {
+      'en': 'We need water and food',
+      'hi': 'हमें पानी और भोजन चाहिए',
+      'mr': 'आम्हाला पाणी आणि अन्न हवे आहे',
+      'gu': 'અમને પાણી અને ખોરાકની જરૂર છે',
+      'ta': 'எங்களுக்கு தண்ணீரும் உணவும் தேவை',
+      'te': 'మాకు నీరు మరియు ఆహారం కావాలి',
+      'kn': 'ನಮಗೆ ನೀರು ಮತ್ತು ಆಹಾರ ಬೇಕು',
+      'ml': 'ഞങ്ങൾക്ക് വെള്ളവും ഭക്ഷണവും വേണം',
+      'bn': 'আমাদের জল এবং খাবার প্রয়োজন',
+      'or': 'ଆମକୁ ପାଣି ଏବଂ ଖାଦ୍ୟ ଆବଶ୍ୟକ',
+    },
+
+    // --- Tactical, Location & Commands ---
+    'where are you': {
+      'en': 'Where are you',
+      'hi': 'आप कहाँ हैं',
+      'mr': 'तुम्ही कुठे आहात',
+      'gu': 'તમે ક્યાં છો',
+      'ta': 'நீங்கள் எங்கே இருக்கிறீர்கள்',
+      'te': 'మీరు ఎక్కడ ఉన్నారు',
+      'kn': 'ನೀವು ಎಲ್ಲಿದ್ದೀರಿ',
+      'ml': 'നിങ്ങൾ എവിടെയാണ്',
+      'bn': 'আপনি কোথায় আছেন',
+      'or': 'ଆପଣ କେଉଁଠାରେ ଅଛନ୍ତି',
+    },
+    'what is your status': {
+      'en': 'What is your status',
+      'hi': 'आपकी स्थिति क्या है',
+      'mr': 'तुमची स्थिती काय आहे',
+      'gu': 'તમારી સ્થિતિ શું છે',
+      'ta': 'உங்கள் நிலை என்ன',
+      'te': 'మీ పరిస్థితి ఏమిటి',
+      'kn': 'ನಿಮ್ಮ ಸ್ಥಿತಿ ಏನು',
+      'ml': 'നിങ്ങളുടെ അവസ്ഥ എന്താണ്',
+      'bn': 'আপনার অবস্থা কি',
+      'or': 'ଆପଣଙ୍କ ସ୍ଥିତି କଣ',
+    },
+    'hold position': {
+      'en': 'Hold position',
+      'hi': 'अपनी स्थिति बनाए रखें',
+      'mr': 'जागेवरच थांबा',
+      'gu': 'પોતાની સ્થિતિ જાળવી રાખો',
+      'ta': 'நிலையைப் பிடித்துக் கொள்ளுங்கள்',
+      'te': 'స్థానాన్ని పట్టుకోండి',
+      'kn': 'ಸ್ಥಾನದಲ್ಲಿರಿ',
+      'ml': 'നിലനിർത്തുക',
+      'bn': 'অবস্থান ধরে রাখুন',
+      'or': 'ସ୍ଥିତି ବଜାୟ ରଖନ୍ତୁ',
+    },
+    'advance now': {
+      'en': 'Advance now',
+      'hi': 'आगे बढ़ें',
+      'mr': 'पुढे चला',
+      'gu': 'આગળ વધો',
+      'ta': 'இப்போது முன்னேறுங்கள்',
+      'te': 'ముందుకు సాగండి',
+      'kn': 'ಮುಂದೆ ಸಾಗಿ',
+      'ml': 'മുന്നോട്ട് പോകുക',
+      'bn': 'সামনে এগিয়ে যান',
+      'or': 'ଆଗକୁ ବଢ଼ନ୍ତୁ',
+    },
+    'send reinforcements': {
+      'en': 'Send reinforcements',
+      'hi': 'अतिरिक्त सहायता भेजें',
+      'mr': 'अतिरिक्त मदत पाठवा',
+      'gu': 'વધારાની મદદ મોકલો',
+      'ta': 'கூடுதல் படைகளை அனுப்புங்கள்',
+      'te': 'అదనపు దళాలను పంపండి',
+      'kn': 'ಹೆಚ್ಚುವರಿ ಪಡೆಗಳನ್ನು ಕಳುಹಿಸಿ',
+      'ml': 'കൂടുതൽ സഹായം അയക്കുക',
+      'bn': 'অতিরিক্ত সাহায্য পাঠান',
+      'or': 'ଅତିରିକ୍ତ ସାହାଯ୍ୟ ପଠାନ୍ତୁ',
     },
     'location': {
       'en': 'Location',
       'hi': 'स्थान',
-      'mr': 'स्थान',
+      'mr': 'ठिकाण',
       'gu': 'સ્થાન',
-      'ta': 'இருப்பிடம்',
+      'ta': 'இடம்',
       'te': 'స్థానం',
       'kn': 'ಸ್ಥಳ',
-      'ml': 'സ്ഥാനം',
+      'ml': 'സ്ഥലം',
       'bn': 'অবস্থান',
       'or': 'ସ୍ଥାନ',
+    },
+    'coordinates': {
+      'en': 'Coordinates',
+      'hi': 'निर्देशांक',
+      'mr': 'निर्देशांक',
+      'gu': 'નિર્દેશાંકો',
+      'ta': 'ஆயத்தொலைவுகள்',
+      'te': 'కోఆర్డినేట్లు',
+      'kn': 'ನಿರ್ದೇಶಾಂಕಗಳು',
+      'ml': 'കോർഡിനേറ്റുകൾ',
+      'bn': 'স্থানাঙ্ক',
+      'or': 'ନିର୍ଦ୍ଦେଶାଙ୍କ',
+    },
+    'team': {
+      'en': 'Team',
+      'hi': 'टीम',
+      'mr': 'संघ',
+      'gu': 'ટીમ',
+      'ta': 'அணி',
+      'te': 'బృందం',
+      'kn': 'ತಂಡ',
+      'ml': 'ടീം',
+      'bn': 'দল',
+      'or': 'ଦଳ',
+    },
+    'station': {
+      'en': 'Station',
+      'hi': 'स्टेशन',
+      'mr': 'स्टेशन',
+      'gu': 'સ્ટેશન',
+      'ta': 'நிலையம்',
+      'te': 'స్టేషన్',
+      'kn': 'ನಿಲ್ದಾಣ',
+      'ml': 'സ്റ്റേഷൻ',
+      'bn': 'স্টেশন',
+      'or': 'ଷ୍ଟେସନ',
     },
     'sector': {
       'en': 'Sector',
       'hi': 'सेक्टर',
-      'mr': 'सेक्टर',
+      'mr': 'विभाग',
       'gu': 'સેક્ટર',
       'ta': 'பிரிவு',
-      'te': 'సెక్టార్',
+      'te': 'రంగం',
       'kn': 'ವಲಯ',
       'ml': 'മേഖല',
       'bn': 'সেক্টর',
@@ -193,7 +583,7 @@ class IndicTransEngine {
       'hi': 'रेडियो',
       'mr': 'रेडिओ',
       'gu': 'રેડિયો',
-      'ta': 'ரேடியோ',
+      'ta': 'வானொலி',
       'te': 'రేడియో',
       'kn': 'ರೇಡಿಯೋ',
       'ml': 'റേഡിയോ',
@@ -203,98 +593,38 @@ class IndicTransEngine {
     'signal': {
       'en': 'Signal',
       'hi': 'सिग्नल',
-      'mr': 'सिग्नल',
+      'mr': 'संकेत',
       'gu': 'સિગ્નલ',
       'ta': 'சமிக்ஞை',
       'te': 'సిగ్నల్',
-      'kn': 'ಸಿಗ್ನಲ್',
+      'kn': 'ಸಂಕೇತ',
       'ml': 'സിഗ്നൽ',
       'bn': 'সংকেত',
-      'or': 'ସିଗନାଲ',
+      'or': 'ସଙ୍କେତ',
     },
-    'team': {
-      'en': 'Team',
-      'hi': 'टीम',
-      'mr': 'संघ',
-      'gu': 'ટીમ',
-      'ta': 'குழு',
-      'te': 'బృందం',
-      'kn': 'ತಂಡ',
-      'ml': 'ടീം',
-      'bn': 'দল',
-      'or': 'ଦଳ',
+    'battery': {
+      'en': 'Battery',
+      'hi': 'बैटरी',
+      'mr': 'बॅटरी',
+      'gu': 'બેટરી',
+      'ta': 'மின்கலம்',
+      'te': 'బ్యాటరీ',
+      'kn': 'ಬ್ಯಾಟರಿ',
+      'ml': 'ബാറ്ററി',
+      'bn': 'ব্যাটারি',
+      'or': 'ବ୍ୟାଟେରୀ',
     },
-    'message': {
-      'en': 'Message',
-      'hi': 'संदेश',
-      'mr': 'संदेश',
-      'gu': 'સંદેશ',
-      'ta': 'செய்தி',
-      'te': 'సందేశం',
-      'kn': 'ಸಂದೇಶ',
-      'ml': 'സന്ദേശം',
-      'bn': 'বার্তা',
-      'or': 'ବାର୍ତ୍ତା',
-    },
-    'ok': {
-      'en': 'OK, Copy',
-      'hi': 'ठीक है, कॉपी',
-      'mr': 'ठीक आहे, समजले',
-      'gu': 'બરાબર, સમજાયું',
-      'ta': 'சரி, புரிந்தது',
-      'te': 'సరే, కాపీ',
-      'kn': 'ಸರಿ, ಅರ್ಥವಾಯಿತು',
-      'ml': 'ശരി, മനസ്സിലായി',
-      'bn': 'ঠিক আছে, গৃহীত',
-      'or': 'ଠିକ ଅଛି, କପି',
-    },
-    'standby': {
-      'en': 'Stand by',
-      'hi': 'प्रतीक्षा करें',
-      'mr': 'प्रतीक्षा करा',
-      'gu': 'રાહ જુઓ',
-      'ta': 'காத்திருக்கவும்',
-      'te': 'వేచి ఉండండి',
-      'kn': 'ಕಾಯಿರಿ',
-      'ml': 'കാത്തിരിക്കുക',
-      'bn': 'অপেক্ষা করুন',
-      'or': 'ଅପେକ୍ଷା କରନ୍ତୁ',
-    },
-    'injured': {
-      'en': 'Injured person',
-      'hi': 'घायल व्यक्ति',
-      'mr': 'जखमी व्यक्ती',
-      'gu': 'ઈજાગ્રસ્ત વ્યક્તિ',
-      'ta': 'காயமடைந்த நபர்',
-      'te': 'గాయపడిన వ్యక్తి',
-      'kn': 'ಗಾಯಗೊಂಡ ವ್ಯಕ್ತಿ',
-      'ml': 'പരിക്കേറ്റ ആൾ',
-      'bn': 'আহত ব্যক্তি',
-      'or': 'ଆହତ ବ୍ୟକ୍ତି',
-    },
-    'safe': {
-      'en': 'We are safe',
-      'hi': 'हम सुरक्षित हैं',
-      'mr': 'आम्ही सुरक्षित आहोत',
-      'gu': 'અમે સુરક્ષિત છીએ',
-      'ta': 'நாங்கள் பாதுகாப்பாக இருக்கிறோம்',
-      'te': 'మేము సురక్షితంగా ఉన్నాము',
-      'kn': 'ನಾವು ಸುರಕ್ಷಿತವಾಗಿದ್ದೇವೆ',
-      'ml': 'ഞങ്ങൾ സുരക്ഷിതരാണ്',
-      'bn': 'আমরা নিরাপদ',
-      'or': 'ଆମେ ସୁରକ୍ଷିତ ଅଛୁ',
-    },
-    'evacuate': {
-      'en': 'Evacuate immediately',
-      'hi': 'तुरंत खाली करें',
-      'mr': 'त्वरित बाहेर पडा',
-      'gu': 'તરત જ ખાલી કરો',
-      'ta': 'உடனடியாக வெளியேறவும்',
-      'te': 'వెంటనే ఖాళీ చేయండి',
-      'kn': 'ತಕ್ಷಣವೇ ಖಾಲಿ ಮಾಡಿ',
-      'ml': 'ഉടൻ ഒഴിഞ്ഞുപോകുക',
-      'bn': 'অবিলম্বে সরিয়ে নিন',
-      'or': 'ତୁରନ୍ତ ଖାଲି କରନ୍ତୁ',
+    'active': {
+      'en': 'Active',
+      'hi': 'सक्रिय',
+      'mr': 'सक्रिय',
+      'gu': 'સક્રિય',
+      'ta': 'செயலில் உள்ளது',
+      'te': 'యాక్టివ్',
+      'kn': 'ಸಕ್ರಿಯ',
+      'ml': 'സജീവം',
+      'bn': 'সক্রিয়',
+      'or': 'ସକ୍ରିୟ',
     },
     'priority': {
       'en': 'Priority',
@@ -308,23 +638,23 @@ class IndicTransEngine {
       'bn': 'অগ্রাধিকার',
       'or': 'ପ୍ରାଥମିକତା',
     },
-    'coordinates': {
-      'en': 'Coordinates',
-      'hi': 'निर्देशांक',
-      'mr': 'निर्देशांक',
-      'gu': 'નિર્દેશાંક',
-      'ta': 'ஆயத்தொலைவுகள்',
-      'te': 'కోఆర్డినేట్లు',
-      'kn': 'ನಿರ್ದೇಶಾಂಕಗಳು',
-      'ml': 'കോർഡിനേറ്റുകൾ',
-      'bn': 'স্থানাঙ্ক',
-      'or': 'ସ୍ଥାନାଙ୍କ',
+    'message': {
+      'en': 'Message',
+      'hi': 'संदेश',
+      'mr': 'संदेश',
+      'gu': 'સંદેશ',
+      'ta': 'செய்தி',
+      'te': 'సందేశం',
+      'kn': 'ಸಂದೇಶ',
+      'ml': 'സന്ദേശം',
+      'bn': 'বার্তা',
+      'or': 'ବାର୍ତ୍ତା',
     },
     'confirmed': {
       'en': 'Confirmed',
       'hi': 'पुष्ट',
-      'mr': 'निश्चित',
-      'gu': 'ખાતરી થઈ',
+      'mr': 'पुष्टी',
+      'gu': 'પુષ્ટિ',
       'ta': 'உறுதிப்படுத்தப்பட்டது',
       'te': 'ధృవీకరించబడింది',
       'kn': 'ದೃಢೀಕರಿಸಲಾಗಿದೆ',
@@ -336,11 +666,11 @@ class IndicTransEngine {
       'en': 'Transceiver',
       'hi': 'ट्रांसीवर',
       'mr': 'ट्रान्सीव्हर',
-      'gu': 'ટ્રાંસીવર',
-      'ta': 'டிரான்ஸ்சீவர்',
+      'gu': 'ટ્રાન્સસીવર',
+      'ta': 'டிரான்ஸீவர்',
       'te': 'ట్రాన్స్‌సీవర్',
       'kn': 'ಟ್ರಾನ್ಸ್‌ಸಿವರ್',
-      'ml': 'ട്രാൻസ്‌സീവർ',
+      'ml': 'ട്രാൻസ്‌സിവർ',
       'bn': 'ট্রান্সসিভার',
       'or': 'ଟ୍ରାନ୍ସସିଭର୍',
     },
@@ -356,17 +686,129 @@ class IndicTransEngine {
       'bn': 'সংযোগ',
       'or': 'ଲିଙ୍କ୍',
     },
-    'active': {
-      'en': 'Active',
-      'hi': 'सक्रिय',
-      'mr': 'सक्रिय',
-      'gu': 'સક્રિય',
-      'ta': 'செயலில் உள்ளது',
-      'te': 'యాక్టివ్',
-      'kn': 'ಸಕ್ರಿಯ',
-      'ml': 'സജീവം',
-      'bn': 'সক্রিয়',
-      'or': 'ସକ୍ରିୟ',
+
+    // --- Numbers & Quantities ---
+    'one': {
+      'en': 'One',
+      'hi': 'एक',
+      'mr': 'एक',
+      'gu': 'એક',
+      'ta': 'ஒன்று',
+      'te': 'ఒకటి',
+      'kn': 'ಒಂದು',
+      'ml': 'ഒന്ന്',
+      'bn': 'এক',
+      'or': 'ଏକ',
+    },
+    'two': {
+      'en': 'Two',
+      'hi': 'दो',
+      'mr': 'दोन',
+      'gu': 'બે',
+      'ta': 'இரண்டு',
+      'te': 'రెండు',
+      'kn': 'ಎರಡು',
+      'ml': 'രണ്ട്',
+      'bn': 'দুই',
+      'or': 'ଦୁଇ',
+    },
+    'three': {
+      'en': 'Three',
+      'hi': 'तीन',
+      'mr': 'तीन',
+      'gu': 'ત્રણ',
+      'ta': 'மூன்று',
+      'te': 'మూడు',
+      'kn': 'ಮೂರು',
+      'ml': 'മൂന്ന്',
+      'bn': 'তিন',
+      'or': 'ତିନି',
+    },
+    'four': {
+      'en': 'Four',
+      'hi': 'चार',
+      'mr': 'चार',
+      'gu': 'ચાર',
+      'ta': 'நான்கு',
+      'te': 'నాలుగు',
+      'kn': 'ನಾಲ್ಕು',
+      'ml': 'നാല്',
+      'bn': 'চার',
+      'or': 'ଚାରି',
+    },
+    'five': {
+      'en': 'Five',
+      'hi': 'पाँच',
+      'mr': 'पाच',
+      'gu': 'પાંચ',
+      'ta': 'ஐந்து',
+      'te': 'ఐదు',
+      'kn': 'ಐದು',
+      'ml': 'അഞ്ച്',
+      'bn': 'পাঁচ',
+      'or': 'ପାଞ୍ଚ',
+    },
+    'ten': {
+      'en': 'Ten',
+      'hi': 'दस',
+      'mr': 'दहा',
+      'gu': 'દસ',
+      'ta': 'பத்து',
+      'te': 'పది',
+      'kn': 'ಹತ್ತು',
+      'ml': 'പത്ത്',
+      'bn': 'দশ',
+      'or': 'ଦଶ',
+    },
+
+    // --- Directions ---
+    'north': {
+      'en': 'North',
+      'hi': 'उत्तर',
+      'mr': 'उत्तर',
+      'gu': 'ઉત્તર',
+      'ta': 'வடக்கு',
+      'te': 'ఉత్తరం',
+      'kn': 'ಉತ್ತರ',
+      'ml': 'വടക്ക്',
+      'bn': 'উত্তর',
+      'or': 'ଉତ୍ତର',
+    },
+    'south': {
+      'en': 'South',
+      'hi': 'दक्षिण',
+      'mr': 'दक्षिण',
+      'gu': 'દક્ષિણ',
+      'ta': 'தெற்கு',
+      'te': 'దక్షిణం',
+      'kn': 'ದಕ್ಷಿಣ',
+      'ml': 'തെക്ക്',
+      'bn': 'দক্ষিণ',
+      'or': 'ଦକ୍ଷିଣ',
+    },
+    'east': {
+      'en': 'East',
+      'hi': 'पूर्व',
+      'mr': 'पूर्व',
+      'gu': 'પૂર્વ',
+      'ta': 'கிழக்கு',
+      'te': 'తూర్పు',
+      'kn': 'ಪೂರ್ವ',
+      'ml': 'കിഴക്ക്',
+      'bn': 'পূর্ব',
+      'or': 'ପୂର୍ବ',
+    },
+    'west': {
+      'en': 'West',
+      'hi': 'पश्चिम',
+      'mr': 'पश्चिम',
+      'gu': 'પશ્ચિમ',
+      'ta': 'மேற்கு',
+      'te': 'పడమర',
+      'kn': 'ಪಶ್ಚಿಮ',
+      'ml': 'പടിഞ്ഞാറ്',
+      'bn': 'পশ্চিম',
+      'or': 'ପଶ୍ଚିମ',
     },
   };
 
@@ -374,7 +816,6 @@ class IndicTransEngine {
   bool get isQuantizedModelReady => _isQuantizedModelReady;
   String _quantizedModelPath = '';
   String get quantizedModelPath => _quantizedModelPath;
-
 
   /// Inspects on-device model storage for AI4Bharat IndicTrans2 model (INT8 or FP16)
   Future<bool> checkQuantizedModel(String baseDirPath, [String? preferredPrecision]) async {
@@ -453,18 +894,28 @@ class IndicTransEngine {
       }
     }
 
+    final neuralOk = await NeuralMtEngine.instance.init(baseDirPath);
+    if (neuralOk) {
+      _isQuantizedModelReady = true;
+      _loadedPrecision = 'INT8';
+      return true;
+    }
+
+    await tokenizer.init(baseDirPath);
     _isQuantizedModelReady = false;
     _quantizedModelPath = '';
     return false;
   }
 
-  /// Translates [text] from [sourceLang] to [targetLang].
+  /// Translates [text] from [sourceLang] to [targetLang] across all 10 supported languages.
   ///
   /// Execution Pipeline:
-  /// 1. Identity check (if source == target, return verbatim).
-  /// 2. Concept & Emergency Phrase Translation (high accuracy, zero-latency on-device).
-  /// 3. Token-level dictionary translation for compound phrases.
-  /// 4. Online neural AI4Bharat IndicTrans API fallback for arbitrary sentences.
+  /// 1. Language Detection & Verification (auto-resolves conflicting scripts).
+  /// 2. Identity Check (if source == target, return verbatim).
+  /// 3. Tier 1: Direct Concept / Multi-Word Phrase Match (instant sub-millisecond tactical match).
+  /// 4. Tier 2: Neural Seq2Seq ONNX Translation (arbitrary sentences via IndicTrans2 INT8).
+  /// 5. Tier 3: Full Sentence & Token Translation across all 10 languages.
+  /// 6. Script Alignment: Ensures target output matches the target language's native script.
   Future<String> translate({
     required String text,
     required String sourceLang,
@@ -473,7 +924,7 @@ class IndicTransEngine {
     final cleanText = text.trim();
     if (cleanText.isEmpty) return '';
 
-    final src = sourceLang.toLowerCase();
+    String src = sourceLang.toLowerCase();
     final tgt = targetLang.toLowerCase();
 
     // 0. Offload Check
@@ -482,42 +933,63 @@ class IndicTransEngine {
       return cleanText;
     }
 
+    // Verify source language if script contradicts caller's language code
+    final detectedScript = ScriptNormalizationEngine.detectScript(cleanText);
+    final expectedSrcScript = ScriptNormalizationEngine.expectedScriptForLanguage(src);
+    if (detectedScript != expectedSrcScript && detectedScript != ScriptType.unknown) {
+      final detected = detectLanguage(cleanText);
+      if (detected.confidence >= 0.80 && detected.languageCode != src) {
+        debugPrint('[IndicTrans] Auto-corrected source language from $src to ${detected.languageCode} (conf: ${detected.confidence})');
+        src = detected.languageCode;
+      }
+    }
+
     // 1. Script Pre-normalization for MT Input
     final normalizedInput = ScriptNormalizationEngine.prepareTextForMt(cleanText, src);
 
     // 2. Identity Check
     if (src == tgt) return normalizedInput;
 
-    // 3. Direct Concept / Phrase Match (ONLY for standalone short phrases <= 3 words)
+    // 3. Direct Multi-word / Concept Match (Tier 1: Instant tactical emergency phrases < 1 ms)
     final matchedConcept = _findMatchingConcept(normalizedInput, src);
     if (matchedConcept != null) {
       final translated = conceptLexicon[matchedConcept]?[tgt];
       if (translated != null && translated.isNotEmpty) {
-        debugPrint('[IndicTrans] Full concept match: $matchedConcept -> $translated ($tgt)');
+        debugPrint('[IndicTrans] Concept match: "$matchedConcept" -> "$translated" ($tgt)');
         return ScriptNormalizationEngine.normalizeFromMt(translated, tgt);
       }
     }
 
-    // 4. Full Sentence & Token Translation (translates every word while preserving punctuation)
+    // 4. Tier 2: Neural Seq2Seq ONNX Translation (for arbitrary sentences)
+    if (NeuralMtEngine.instance.isReady) {
+      final neuralTranslation = await NeuralMtEngine.instance.translate(
+        text: normalizedInput,
+        sourceLang: src,
+        targetLang: tgt,
+      );
+      if (neuralTranslation != null && neuralTranslation.trim().isNotEmpty) {
+        debugPrint('[IndicTrans] Neural translation: "$normalizedInput" -> "$neuralTranslation"');
+        return ScriptNormalizationEngine.normalizeFromMt(neuralTranslation, tgt);
+      }
+    }
+
+    // 5. Tier 3: Tactical Token Replacement & Phonetic Transliteration
     final tokenResult = _translateTokens(normalizedInput, src, tgt);
     if (tokenResult != normalizedInput) {
-      debugPrint('[IndicTrans] Full sentence translation: "$normalizedInput" -> "$tokenResult"');
+      debugPrint('[IndicTrans] Sentence translation: "$normalizedInput" -> "$tokenResult"');
       return ScriptNormalizationEngine.normalizeFromMt(tokenResult, tgt);
     }
 
-    // 5. Final fallback with cross-script normalization
+    // 6. Final fallback with cross-script alignment
     return ScriptNormalizationEngine.normalizeFromMt(normalizedInput, tgt);
   }
 
-  /// Finds matching disaster or tactical concept for standalone short utterances (<= 3 words)
+  /// Finds matching disaster, tactical, or conversational concept for utterances
   String? _findMatchingConcept(String text, String srcLang) {
     final clean = text.toLowerCase().replaceAll(RegExp(r'[^\w\s\u0900-\u0D7F]'), '').trim();
     if (clean.isEmpty) return null;
 
-    // Do NOT swallow full sentences into a single concept word
-    final words = clean.split(RegExp(r'\s+'));
-    if (words.length > 3) return null;
-
+    // Direct match against all concept entries
     for (final entry in conceptLexicon.entries) {
       final termInSrc = entry.value[srcLang]?.toLowerCase().trim();
       if (termInSrc != null && termInSrc.isNotEmpty) {
@@ -533,7 +1005,8 @@ class IndicTransEngine {
     return null;
   }
 
-  /// Translates all vocabulary tokens and technical concepts across full sentences
+  /// Translates vocabulary tokens, multi-word phrases, and technical concepts
+  /// across full sentences while preserving punctuation and numbers.
   String _translateTokens(String text, String srcLang, String tgtLang) {
     String working = text;
 
@@ -549,19 +1022,25 @@ class IndicTransEngine {
       final srcWord = entry.value[srcLang];
       final tgtWord = entry.value[tgtLang];
       if (srcWord != null && tgtWord != null && srcWord.isNotEmpty) {
-        final pattern = RegExp(r'(?<=^|\s|[.,!?:;])' + RegExp.escape(srcWord) + r'(?=$|\s|[.,!?:;])', caseSensitive: false);
+        final pattern = RegExp(
+          r'(?<=^|\s|[.,!?:;])' + RegExp.escape(srcWord) + r'(?=$|\s|[.,!?:;])',
+          caseSensitive: false,
+        );
         working = working.replaceAll(pattern, tgtWord);
       }
       // Also match English concept key directly if source language is English
       if (srcLang == 'en' && tgtWord != null) {
-        final pattern = RegExp(r'(?<=^|\s|[.,!?:;])' + RegExp.escape(entry.key) + r'(?=$|\s|[.,!?:;])', caseSensitive: false);
+        final pattern = RegExp(
+          r'(?<=^|\s|[.,!?:;])' + RegExp.escape(entry.key) + r'(?=$|\s|[.,!?:;])',
+          caseSensitive: false,
+        );
         working = working.replaceAll(pattern, tgtWord);
       }
     }
 
-    // For any remaining untranslated English words when target is an Indic script,
-    // phonetically transliterate them so the sentence remains readable in target script
-    if (srcLang == 'en' && tgtLang != 'en') {
+    // Handle remaining words:
+    // If target is an Indic language and words remain in Latin, transliterate to target script
+    if (tgtLang != 'en') {
       final targetScript = ScriptNormalizationEngine.expectedScriptForLanguage(tgtLang);
       final tokens = working.split(RegExp(r'(?<=\s|[.,!?:;])|(?=\s|[.,!?:;])'));
       final buffer = StringBuffer();
@@ -571,6 +1050,21 @@ class IndicTransEngine {
           final deva = ScriptNormalizationEngine.toDevanagariFromLatin(cleanToken);
           final inTgt = ScriptNormalizationEngine.fromDevanagariToIndic(deva, targetScript);
           buffer.write(token.replaceAll(cleanToken, inTgt));
+        } else {
+          buffer.write(token);
+        }
+      }
+      working = buffer.toString();
+    } else if (srcLang != 'en' && tgtLang == 'en') {
+      // If source was Indic and target is English, transliterate any untranslated Indic words to Latin
+      final tokens = working.split(RegExp(r'(?<=\s|[.,!?:;])|(?=\s|[.,!?:;])'));
+      final buffer = StringBuffer();
+      for (final token in tokens) {
+        final cleanToken = token.trim();
+        final script = ScriptNormalizationEngine.detectScript(cleanToken);
+        if (cleanToken.isNotEmpty && script != ScriptType.latin && script != ScriptType.unknown) {
+          final latin = ScriptNormalizationEngine.toLatin(cleanToken);
+          buffer.write(token.replaceAll(cleanToken, latin));
         } else {
           buffer.write(token);
         }
@@ -608,4 +1102,3 @@ class LanguageDetectionResult {
   @override
   String toString() => '$languageCode (${(confidence * 100).toStringAsFixed(1)}%)';
 }
-

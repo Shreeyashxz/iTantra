@@ -237,20 +237,36 @@ class LanguagePackManager {
     return await indicFp32.exists() && await tokens.exists();
   }
 
-  Future<bool> isMtAvailable() async {
+  Future<bool> isMtIndicIndicAvailable() async {
     final dir = await getModelsDirectory();
-    final subModel = File(p.join(dir.path, 'mt', 'int8', 'encoder_model.onnx'));
-    final subData = File(p.join(dir.path, 'mt', 'int8', 'encoder_model.onnx.data'));
-    final subSpm = File(p.join(dir.path, 'mt', 'int8', 'spm.model'));
-    if (await subModel.exists() && await subData.exists() && await subSpm.exists()) {
-      return (await subData.length()) > 50 * 1024 * 1024;
+    final modelDir = Directory(p.join(dir.path, 'mt', 'indic_indic', 'int8'));
+    final enc = File(p.join(modelDir.path, 'encoder_model.onnx.data'));
+    final dec = File(p.join(modelDir.path, 'decoder_shared.onnx.data'));
+    if (await enc.exists() && await dec.exists()) {
+      return (await enc.length()) > 50 * 1024 * 1024 && (await dec.length()) > 50 * 1024 * 1024;
     }
     // Backward compatibility with legacy flat directory layout
-    final model = File(p.join(dir.path, 'mt', 'indictrans2_int8.onnx'));
-    final data = File(p.join(dir.path, 'mt', 'encoder_model.onnx.data'));
-    final spm = File(p.join(dir.path, 'mt', 'spm.model'));
-    if (!await model.exists() || !await data.exists() || !await spm.exists()) return false;
-    return (await data.length()) > 50 * 1024 * 1024;
+    final legacyEnc = File(p.join(dir.path, 'mt', 'int8', 'encoder_model.onnx.data'));
+    final legacyDec = File(p.join(dir.path, 'mt', 'int8', 'decoder_shared.onnx.data'));
+    if (await legacyEnc.exists() && await legacyDec.exists()) {
+      return (await legacyEnc.length()) > 50 * 1024 * 1024 && (await legacyDec.length()) > 50 * 1024 * 1024;
+    }
+    return false;
+  }
+
+  Future<bool> isMtIndicEnAvailable() async {
+    final dir = await getModelsDirectory();
+    final modelDir = Directory(p.join(dir.path, 'mt', 'indic_en', 'int8'));
+    final enc = File(p.join(modelDir.path, 'encoder_model.onnx.data'));
+    final dec = File(p.join(modelDir.path, 'decoder_shared.onnx.data'));
+    if (await enc.exists() && await dec.exists()) {
+      return (await enc.length()) > 50 * 1024 * 1024 && (await dec.length()) > 50 * 1024 * 1024;
+    }
+    return false;
+  }
+
+  Future<bool> isMtAvailable() async {
+    return (await isMtIndicIndicAvailable()) || (await isMtIndicEnAvailable());
   }
 
   Future<bool> isMtFp16Available() async {
@@ -336,64 +352,169 @@ class LanguagePackManager {
   }
 
   Future<bool> downloadMt() async {
+    return downloadMtIndicIndic();
+  }
+
+  Future<bool> downloadMtIndicIndic() async {
     final modelsDir = await getModelsDirectory();
-    final mtDir = Directory(p.join(modelsDir.path, 'mt', 'int8'));
-    if (!await mtDir.exists()) {
-      await mtDir.create(recursive: true);
-    }
+    final mtDir = Directory(p.join(modelsDir.path, 'mt', 'indic_indic', 'int8'));
+    final fallbackDir = Directory(p.join(modelsDir.path, 'mt', 'int8'));
+    if (!await mtDir.exists()) await mtDir.create(recursive: true);
+    if (!await fallbackDir.exists()) await fallbackDir.create(recursive: true);
 
     final targetModel = File(p.join(mtDir.path, 'encoder_model.onnx'));
     final targetData = File(p.join(mtDir.path, 'encoder_model.onnx.data'));
+    final targetDecModel = File(p.join(mtDir.path, 'decoder_model.onnx'));
+    final targetDecPast = File(p.join(mtDir.path, 'decoder_with_past_model.onnx'));
+    final targetDecData = File(p.join(mtDir.path, 'decoder_shared.onnx.data'));
     final targetSpm = File(p.join(mtDir.path, 'spm.model'));
-    final targetDict = File(p.join(mtDir.path, 'dict.SRC.json'));
-    final legacyModel = File(p.join(modelsDir.path, 'mt', 'indictrans2_int8.onnx'));
+    final targetDictSrc = File(p.join(mtDir.path, 'dict.SRC.json'));
+    final targetDictTgt = File(p.join(mtDir.path, 'dict.TGT.json'));
 
-    // Public ungated AI4Bharat IndicTrans2 INT8 ONNX checkpoint
     const mtBaseUrl =
         'https://huggingface.co/hari31416/indictrans2-indic-indic-dist-320M-ONNX-int8/resolve/main';
 
     try {
-      _emitState(const DownloadStateDownloading('AI4Bharat IndicTrans2 INT8 (Graph)', 0, modelKey: 'mt'));
+      _emitState(const DownloadStateDownloading('IndicTrans2 Indic-Indic 320M', 0, modelKey: 'mt_indic_indic'));
 
-      // 1. Download Quantized Encoder ONNX computational graph (~831 KB)
+      // 1. Encoder Graph
       if (!await targetModel.exists() || await targetModel.length() < 1024) {
         await _downloadFileWithRedirects('$mtBaseUrl/encoder_model.onnx', targetModel, (percent) {
-          _emitState(DownloadStateDownloading('IndicTrans2 INT8 Graph', percent, modelKey: 'mt'));
+          _emitState(DownloadStateDownloading('Indic-Indic Encoder Graph', percent, modelKey: 'mt_indic_indic'));
         });
       }
-      try {
-        if (!await legacyModel.parent.exists()) await legacyModel.parent.create(recursive: true);
-        if (!await legacyModel.exists() || await legacyModel.length() < 1024) {
-          await targetModel.copy(legacyModel.path);
-        }
-      } catch (_) {}
 
-      // 2. Download INT8 Tensor Weights (~120 MB)
+      // 2. Encoder Weights (~120 MB)
       if (!await targetData.exists() || await targetData.length() < 50 * 1024 * 1024) {
         await _downloadFileWithRedirects('$mtBaseUrl/encoder_model.onnx.data', targetData, (percent) {
-          _emitState(DownloadStateDownloading('IndicTrans2 INT8 Weights (~120 MB)', percent, modelKey: 'mt'));
+          _emitState(DownloadStateDownloading('Indic-Indic Encoder Weights (~120 MB)', percent, modelKey: 'mt_indic_indic'));
         });
       }
 
-      // 3. Download SentencePiece Tokenizer Model (~3.25 MB)
+      // 3. Decoder Graph
+      if (!await targetDecModel.exists() || await targetDecModel.length() < 1024) {
+        await _downloadFileWithRedirects('$mtBaseUrl/decoder_model.onnx', targetDecModel, (percent) {
+          _emitState(DownloadStateDownloading('Indic-Indic Decoder Graph', percent, modelKey: 'mt_indic_indic'));
+        });
+      }
+
+      // 4. Decoder Past Graph
+      if (!await targetDecPast.exists() || await targetDecPast.length() < 1024) {
+        await _downloadFileWithRedirects('$mtBaseUrl/decoder_with_past_model.onnx', targetDecPast, (percent) {
+          _emitState(DownloadStateDownloading('Indic-Indic Decoder Past Graph', percent, modelKey: 'mt_indic_indic'));
+        });
+      }
+
+      // 5. Decoder Weights (~203 MB)
+      if (!await targetDecData.exists() || await targetDecData.length() < 50 * 1024 * 1024) {
+        await _downloadFileWithRedirects('$mtBaseUrl/decoder_shared.onnx.data', targetDecData, (percent) {
+          _emitState(DownloadStateDownloading('Indic-Indic Decoder Weights (~203 MB)', percent, modelKey: 'mt_indic_indic'));
+        });
+      }
+
+      // 6. Tokenizer & Dictionaries
       if (!await targetSpm.exists() || await targetSpm.length() < 1000) {
         await _downloadFileWithRedirects('$mtBaseUrl/model.SRC', targetSpm, (percent) {
-          _emitState(DownloadStateDownloading('IndicTrans2 Tokenizer Model', percent, modelKey: 'mt'));
+          _emitState(DownloadStateDownloading('Indic-Indic Tokenizer', percent, modelKey: 'mt_indic_indic'));
+        });
+      }
+      if (!await targetDictSrc.exists() || await targetDictSrc.length() < 100) {
+        await _downloadFileWithRedirects('$mtBaseUrl/dict.SRC.json', targetDictSrc, (percent) {
+          _emitState(DownloadStateDownloading('Indic-Indic Source Dict', percent, modelKey: 'mt_indic_indic'));
+        });
+      }
+      if (!await targetDictTgt.exists() || await targetDictTgt.length() < 100) {
+        await _downloadFileWithRedirects('$mtBaseUrl/dict.TGT.json', targetDictTgt, (percent) {
+          _emitState(DownloadStateDownloading('Indic-Indic Target Dict', percent, modelKey: 'mt_indic_indic'));
         });
       }
 
-      // 4. Download Dictionary & Token mapping (~3.39 MB)
-      if (!await targetDict.exists() || await targetDict.length() < 100) {
-        await _downloadFileWithRedirects('$mtBaseUrl/dict.SRC.json', targetDict, (percent) {
-          _emitState(DownloadStateDownloading('IndicTrans2 Dictionary', percent, modelKey: 'mt'));
-        });
-      }
-
-      _emitState(const DownloadStateCompleted('AI4Bharat IndicTrans2 INT8 Ready'));
+      _emitState(const DownloadStateCompleted('IndicTrans2 Indic-Indic 320M Ready'));
       return true;
     } catch (e) {
-      debugPrint('Error downloading IndicTrans2 INT8 MT: $e');
-      _emitState(DownloadStateError('IndicTrans2 INT8 MT download failed: $e'));
+      debugPrint('Error downloading IndicTrans2 Indic-Indic 320M: $e');
+      _emitState(DownloadStateError('IndicTrans2 Indic-Indic download failed: $e'));
+      return false;
+    }
+  }
+
+  Future<bool> downloadMtIndicEn() async {
+    final modelsDir = await getModelsDirectory();
+    final mtDir = Directory(p.join(modelsDir.path, 'mt', 'indic_en', 'int8'));
+    if (!await mtDir.exists()) await mtDir.create(recursive: true);
+
+    final targetModel = File(p.join(mtDir.path, 'encoder_model.onnx'));
+    final targetData = File(p.join(mtDir.path, 'encoder_model.onnx.data'));
+    final targetDecModel = File(p.join(mtDir.path, 'decoder_model.onnx'));
+    final targetDecPast = File(p.join(mtDir.path, 'decoder_with_past_model.onnx'));
+    final targetDecData = File(p.join(mtDir.path, 'decoder_shared.onnx.data'));
+    final targetSpm = File(p.join(mtDir.path, 'spm.model'));
+    final targetDictSrc = File(p.join(mtDir.path, 'dict.SRC.json'));
+    final targetDictTgt = File(p.join(mtDir.path, 'dict.TGT.json'));
+
+    const mtBaseUrl =
+        'https://huggingface.co/hari31416/indictrans2-indic-en-dist-200M-ONNX-int8/resolve/main';
+
+    try {
+      _emitState(const DownloadStateDownloading('IndicTrans2 Indic-En 200M', 0, modelKey: 'mt_indic_en'));
+
+      // 1. Encoder Graph
+      if (!await targetModel.exists() || await targetModel.length() < 1024) {
+        await _downloadFileWithRedirects('$mtBaseUrl/encoder_model.onnx', targetModel, (percent) {
+          _emitState(DownloadStateDownloading('Indic-En Encoder Graph', percent, modelKey: 'mt_indic_en'));
+        });
+      }
+
+      // 2. Encoder Weights (~120 MB)
+      if (!await targetData.exists() || await targetData.length() < 50 * 1024 * 1024) {
+        await _downloadFileWithRedirects('$mtBaseUrl/encoder_model.onnx.data', targetData, (percent) {
+          _emitState(DownloadStateDownloading('Indic-En Encoder Weights (~120 MB)', percent, modelKey: 'mt_indic_en'));
+        });
+      }
+
+      // 3. Decoder Graph
+      if (!await targetDecModel.exists() || await targetDecModel.length() < 1024) {
+        await _downloadFileWithRedirects('$mtBaseUrl/decoder_model.onnx', targetDecModel, (percent) {
+          _emitState(DownloadStateDownloading('Indic-En Decoder Graph', percent, modelKey: 'mt_indic_en'));
+        });
+      }
+
+      // 4. Decoder Past Graph
+      if (!await targetDecPast.exists() || await targetDecPast.length() < 1024) {
+        await _downloadFileWithRedirects('$mtBaseUrl/decoder_with_past_model.onnx', targetDecPast, (percent) {
+          _emitState(DownloadStateDownloading('Indic-En Decoder Past Graph', percent, modelKey: 'mt_indic_en'));
+        });
+      }
+
+      // 5. Decoder Weights (~110 MB)
+      if (!await targetDecData.exists() || await targetDecData.length() < 50 * 1024 * 1024) {
+        await _downloadFileWithRedirects('$mtBaseUrl/decoder_shared.onnx.data', targetDecData, (percent) {
+          _emitState(DownloadStateDownloading('Indic-En Decoder Weights (~110 MB)', percent, modelKey: 'mt_indic_en'));
+        });
+      }
+
+      // 6. Tokenizer & Dictionaries
+      if (!await targetSpm.exists() || await targetSpm.length() < 1000) {
+        await _downloadFileWithRedirects('$mtBaseUrl/model.SRC', targetSpm, (percent) {
+          _emitState(DownloadStateDownloading('Indic-En Tokenizer', percent, modelKey: 'mt_indic_en'));
+        });
+      }
+      if (!await targetDictSrc.exists() || await targetDictSrc.length() < 100) {
+        await _downloadFileWithRedirects('$mtBaseUrl/dict.SRC.json', targetDictSrc, (percent) {
+          _emitState(DownloadStateDownloading('Indic-En Source Dict', percent, modelKey: 'mt_indic_en'));
+        });
+      }
+      if (!await targetDictTgt.exists() || await targetDictTgt.length() < 100) {
+        await _downloadFileWithRedirects('$mtBaseUrl/dict.TGT.json', targetDictTgt, (percent) {
+          _emitState(DownloadStateDownloading('Indic-En Target Dict', percent, modelKey: 'mt_indic_en'));
+        });
+      }
+
+      _emitState(const DownloadStateCompleted('IndicTrans2 Indic-En 200M Ready'));
+      return true;
+    } catch (e) {
+      debugPrint('Error downloading IndicTrans2 Indic-En 200M: $e');
+      _emitState(DownloadStateError('IndicTrans2 Indic-En download failed: $e'));
       return false;
     }
   }
@@ -461,22 +582,42 @@ class LanguagePackManager {
     }
   }
 
-  Future<bool> deleteMt() async {
+  Future<bool> deleteMtIndicIndic() async {
     try {
       final modelsDir = await getModelsDirectory();
-      final subDir = Directory(p.join(modelsDir.path, 'mt', 'int8'));
-      if (await subDir.exists()) {
-        await subDir.delete(recursive: true);
-      }
+      final subDir = Directory(p.join(modelsDir.path, 'mt', 'indic_indic'));
+      if (await subDir.exists()) await subDir.delete(recursive: true);
+      final legacyDir = Directory(p.join(modelsDir.path, 'mt', 'int8'));
+      if (await legacyDir.exists()) await legacyDir.delete(recursive: true);
       final legacyModel = File(p.join(modelsDir.path, 'mt', 'indictrans2_int8.onnx'));
       if (await legacyModel.exists()) await legacyModel.delete();
 
-      _emitState(const DownloadStateCompleted('IndicTrans2 INT8 model deleted'));
+      _emitState(const DownloadStateCompleted('IndicTrans2 Indic-Indic model deleted'));
       return true;
     } catch (e) {
-      debugPrint('Error deleting IndicTrans2 INT8 MT model: $e');
+      debugPrint('Error deleting IndicTrans2 Indic-Indic MT model: $e');
       return false;
     }
+  }
+
+  Future<bool> deleteMtIndicEn() async {
+    try {
+      final modelsDir = await getModelsDirectory();
+      final subDir = Directory(p.join(modelsDir.path, 'mt', 'indic_en'));
+      if (await subDir.exists()) await subDir.delete(recursive: true);
+
+      _emitState(const DownloadStateCompleted('IndicTrans2 Indic-En model deleted'));
+      return true;
+    } catch (e) {
+      debugPrint('Error deleting IndicTrans2 Indic-En MT model: $e');
+      return false;
+    }
+  }
+
+  Future<bool> deleteMt() async {
+    final ok1 = await deleteMtIndicIndic();
+    final ok2 = await deleteMtIndicEn();
+    return ok1 || ok2;
   }
 
   Future<bool> deleteMtFp16() async {

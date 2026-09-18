@@ -180,7 +180,7 @@ class PhonologicalTransliterationMatrix {
           final scriptChar = row[sIdx];
 
           if (scriptChar.isNotEmpty && devaChar.isNotEmpty) {
-            toDeva[scriptChar] = devaChar;
+            toDeva.putIfAbsent(scriptChar, () => devaChar);
             // First mapped entry for Devanagari wins
             fromDeva.putIfAbsent(devaChar, () => scriptChar);
           }

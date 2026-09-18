@@ -82,11 +82,29 @@ class TransceiverManager {
 
   Timer? _heartbeatTimer;
 
+  TransceiverManager() {
+    _initBleListener();
+  }
+
+  void _initBleListener() {
+    _bleSubscription?.cancel();
+    _bleSubscription = bleTransport.incomingPackets.listen((packet) {
+      totalPacketsReceived++;
+      _incomingPacketsController.add(packet);
+    });
+    bleTransport.statusStream.listen((_) {
+      _updateConnectionState();
+    });
+  }
+
   String get currentStatusString {
     final count = _peerSockets.length;
     if (count > 0) {
       final ips = _peerSockets.keys.join(', ');
       return 'Connected ($count peer${count > 1 ? "s" : ""}: $ips)';
+    } else if (bleTransport.isConnected) {
+      final name = bleTransport.connectedPeerName ?? bleTransport.connectedPeerAddress ?? 'BLE Peer';
+      return 'Connected (BLE Fallback: $name)';
     } else if (_isRunning) {
       return 'Listening on port $_activePort (Ready to pair)';
     } else if (_lastError != null) {

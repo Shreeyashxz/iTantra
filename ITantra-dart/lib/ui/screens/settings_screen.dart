@@ -144,83 +144,39 @@ class SettingsScreen extends StatelessWidget {
                     ),
                     const Divider(height: 16),
 
-                    // MT Model Precision Selection
+                    // MT Model Downloads (IndicTrans2 INT8 Quantized)
                     Text(
-                      'Machine Translation Precision (IndicTrans2)',
+                      'Machine Translation (AI4Bharat IndicTrans2 INT8)',
                       style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
                     ),
-                    const SizedBox(height: 6),
-                    SizedBox(
-                      width: double.infinity,
-                      child: SegmentedButton<String>(
-                        segments: [
-                          ButtonSegment(
-                            value: 'INT8',
-                            icon: const Icon(Icons.speed_rounded),
-                            label: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Text('INT8 (Fast)'),
-                                if (settingsController.isMtReady)
-                                  const Padding(
-                                    padding: EdgeInsets.only(left: 4),
-                                    child: Icon(Icons.check_circle_rounded, size: 14, color: Colors.greenAccent),
-                                  ),
-                              ],
-                            ),
-                          ),
-                          ButtonSegment(
-                            value: 'FP16',
-                            icon: const Icon(Icons.high_quality_rounded),
-                            label: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Text('FP16 (Studio)'),
-                                if (settingsController.isMtFp16Ready)
-                                  const Padding(
-                                    padding: EdgeInsets.only(left: 4),
-                                    child: Icon(Icons.check_circle_rounded, size: 14, color: Colors.greenAccent),
-                                  ),
-                              ],
-                            ),
-                          ),
-                        ],
-                        selected: {settings.mtPrecision},
-                        onSelectionChanged: (set) {
-                          if (set.isNotEmpty) {
-                            settingsController.updateMtPrecision(set.first);
-                          }
-                        },
-                      ),
-                    ),
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 4),
                     Text(
-                      settings.mtPrecision == 'INT8'
-                          ? '⚡ INT8 Quantized: ~110MB download, low RAM footprint (~110MB), ultra-fast offline translation.'
-                          : '🎯 FP16 Studio: ~220MB download, ~220MB RAM, maximum nuance and fidelity across 10 Indic languages.',
+                      'Sovereign on-device neural Seq2Seq translation using quantized INT8 ONNX models with zero cloud dependency.',
                       style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                     ),
                     const SizedBox(height: 10),
 
-                    // MT INT8 Status
+                    // MT Indic-to-Indic 320M INT8 Status
                     _ModelStatusRow(
-                      title: 'IndicTrans2 INT8 Quantized (~110 MB)',
-                      modelKey: 'mt',
-                      isReady: settingsController.isMtReady,
+                      title: 'IndicTrans2 Indic ➔ Indic (320M INT8 ONNX)',
+                      subtitle: 'hari31416/indictrans2-indic-indic-dist-320M-ONNX-int8 (~330 MB)',
+                      modelKey: 'mt_indic_indic',
+                      isReady: settingsController.isMtIndicIndicReady,
                       downloadState: settingsController.downloadState,
-                      onDownload: () => settingsController.downloadMt(),
-                      onDelete: () => settingsController.deleteMt(),
+                      onDownload: () => settingsController.downloadMtIndicIndic(),
+                      onDelete: () => settingsController.deleteMtIndicIndic(),
                     ),
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 8),
 
-                    // MT FP16 Status
+                    // MT Indic-to-English 200M INT8 Status
                     _ModelStatusRow(
-                      title: 'IndicTrans2 FP16 Studio (~220 MB)',
-                      modelKey: 'mt_fp16',
-                      isReady: settingsController.isMtFp16Ready,
+                      title: 'IndicTrans2 Indic ➔ English (200M INT8 ONNX)',
+                      subtitle: 'hari31416/indictrans2-indic-en-dist-200M-ONNX-int8 (~230 MB)',
+                      modelKey: 'mt_indic_en',
+                      isReady: settingsController.isMtIndicEnReady,
                       downloadState: settingsController.downloadState,
-                      onDownload: () => settingsController.downloadMtFp16(),
-                      onDelete: () => settingsController.deleteMtFp16(),
+                      onDownload: () => settingsController.downloadMtIndicEn(),
+                      onDelete: () => settingsController.deleteMtIndicEn(),
                     ),
                     const Divider(height: 16),
 
@@ -674,6 +630,7 @@ class SettingsScreen extends StatelessWidget {
 
 class _ModelStatusRow extends StatelessWidget {
   final String title;
+  final String? subtitle;
   final String modelKey;
   final bool isReady;
   final DownloadState downloadState;
@@ -682,6 +639,7 @@ class _ModelStatusRow extends StatelessWidget {
 
   const _ModelStatusRow({
     required this.title,
+    this.subtitle,
     required this.modelKey,
     required this.isReady,
     required this.downloadState,
@@ -743,6 +701,19 @@ class _ModelStatusRow extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     maxLines: 2,
                   ),
+                  if (subtitle != null) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle!,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant.withAlpha(200),
+                        fontSize: 10.5,
+                        fontFamily: 'monospace',
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                    ),
+                  ],
                   const SizedBox(height: 2),
                   Text(
                     isThisDownloading
