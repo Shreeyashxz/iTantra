@@ -343,6 +343,8 @@ class MainActivity : FlutterActivity() {
     // =========================================================================
     // Bluetooth Low Energy (BLE) Fallback Transport Implementation
     // =========================================================================
+    private var bluetoothManager: BluetoothManager? = null
+    private var bluetoothAdapter: BluetoothAdapter? = null
     private var bleAdvertiser: BluetoothLeAdvertiser? = null
     private var bleGattServer: BluetoothGattServer? = null
     private var bleScanner: BluetoothLeScanner? = null
