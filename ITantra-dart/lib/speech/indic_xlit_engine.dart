@@ -2,29 +2,43 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'neural_xlit_engine.dart';
 import 'phonological_transliteration_matrix.dart';
 import 'script_normalization_engine.dart';
 
-/// Neural & Contextual Transliteration Engine using AI4Bharat IndicXlit (Aksharantar architecture).
-/// Serves as the 3rd normalizer mode ('NEURAL_INDIC_XLIT').
+/// Transliteration Engine with honest neural / fallback separation.
 ///
-/// Features:
-/// 1. Genuine phonological syllabification between Latin (English) and all 10 Indic scripts:
-///    Handles vowel signs (matras), consonant clusters (conjuncts/halant), and inherent vowels.
-/// 2. Comprehensive Aksharantar Colloquial Loanword & Contextual Spelling Dictionary:
-///    Understands everyday loanwords, military, tactical, disaster, medical, and conversational terms.
-/// 3. Flawless bidirectional transliteration between all 10 supported languages:
-///    Hindi (hi), English (en), Marathi (mr), Gujarati (gu), Tamil (ta),
-///    Telugu (te), Kannada (kn), Malayalam (ml), Bengali (bn), Odia (or).
+/// - When a real IndicXlit encoder+decoder ONNX bundle exists in
+///   `<models>/xlit/int8/` (see `scripts/export_indicxlit_onnx.py`),
+///   [transliterate] runs genuine Transformer inference via [NeuralXlitEngine].
+/// - Otherwise the engine uses the built-in Aksharantar loanword table +
+///   phonological syllabifier below and reports [isNeuralActive]==false.
+///   It never claims rule-based output is neural.
+///
+/// Serves as the 3rd normalizer mode ('NEURAL_INDIC_XLIT').
 class IndicXlitEngine {
   static final IndicXlitEngine instance = IndicXlitEngine._internal();
   IndicXlitEngine._internal();
 
-  bool _isLoaded = false;
-  bool get isLoaded => _isLoaded;
+  bool _bundlePresent = false;
+  bool get isLoaded => _bundlePresent;
+
+  /// True only when ONNX OrtSessions are live and inference runs neurally.
+  bool get isNeuralActive => NeuralXlitEngine.instance.isReady;
 
   String? _modelPath;
   String? get modelPath => _modelPath;
+
+  /// Loads the real ONNX bundle if present. Returns true only for neural.
+  Future<bool> init() async {
+    final ok = await NeuralXlitEngine.instance.init();
+    await checkModelExists();
+    return ok;
+  }
+
+  void unload() {
+    NeuralXlitEngine.instance.unload();
+  }
 
   // ===========================================================================
   // Aksharantar Colloquial Loanword & Tactical Vocabulary Matrix
@@ -215,30 +229,73 @@ class IndicXlitEngine {
     ('o', 'ओ', 'ो'),
   ];
 
-  /// Checks if the IndicXlit neural model or weights exist on device storage.
+  /// Checks whether a real ONNX bundle (encoder+decoder) exists on disk.
+  /// Presence alone does NOT mean neural is active; call [init] to create
+  /// OrtSessions. Legacy single-file `indicxlit.onnx` (previously a renamed
+  /// Fairseq `.pt`) is ignored and cleaned up by [LanguagePackManager].
   Future<bool> checkModelExists() async {
     try {
       final docDir = await getApplicationSupportDirectory();
-      final target = File(p.join(docDir.path, 'models', 'indicxlit.onnx'));
-      final targetSub = File(p.join(docDir.path, 'models', 'xlit', 'indicxlit.onnx'));
-      if (await target.exists() && (await target.length()) > 1024) {
-        _modelPath = target.path;
-        _isLoaded = true;
+      final bundleDir = Directory(p.join(docDir.path, 'models', 'xlit', 'int8'));
+      final enc = File(p.join(bundleDir.path, 'encoder_model.onnx'));
+      final dec = File(p.join(bundleDir.path, 'decoder_model.onnx'));
+      if (await enc.exists() &&
+          await dec.exists() &&
+          (await enc.length()) > 1024 &&
+          (await dec.length()) > 1024) {
+        _modelPath = bundleDir.path;
+        _bundlePresent = true;
         return true;
       }
-      if (await targetSub.exists() && (await targetSub.length()) > 1024) {
-        _modelPath = targetSub.path;
-        _isLoaded = true;
-        return true;
-      }
-      _modelPath = target.path;
-      _isLoaded = false;
+      _modelPath = bundleDir.path;
+      _bundlePresent = false;
       return false;
     } catch (e) {
       debugPrint('[IndicXlit] Error checking model path: $e');
-      _isLoaded = false;
+      _bundlePresent = false;
       return false;
     }
+  }
+
+  /// Async transliteration that prefers genuine neural inference when ready.
+  /// Returns `isNeural` flag alongside text so UI never mislabels fallback.
+  Future<({String text, bool isNeural})> transliterate({
+    required String text,
+    required ScriptType sourceScript,
+    required ScriptType targetScript,
+  }) async {
+    if (text.trim().isEmpty || sourceScript == targetScript) {
+      return (text: text, isNeural: false);
+    }
+    if (isNeuralActive) {
+      try {
+        // Neural operates on the raw string; script routing handled by caller.
+        final neural = await NeuralXlitEngine.instance.transliterate(text: text);
+        if (neural != null && neural.trim().isNotEmpty) {
+          // Map neural Devanagari pivot to requested target when needed.
+          if (sourceScript == ScriptType.latin &&
+              targetScript != ScriptType.devanagari &&
+              targetScript != ScriptType.latin) {
+            final mapped = PhonologicalTransliterationMatrix.fromDevanagariPhonological(
+              neural,
+              targetScript,
+            );
+            return (text: mapped, isNeural: true);
+          }
+          return (text: neural, isNeural: true);
+        }
+      } catch (e) {
+        debugPrint('[IndicXlit] neural failed, fallback: $e');
+      }
+    }
+    return (
+      text: transliterateSync(
+        text: text,
+        sourceScript: sourceScript,
+        targetScript: targetScript,
+      ),
+      isNeural: false
+    );
   }
 
   /// Transliterates text between any two scripts (including Latin) using

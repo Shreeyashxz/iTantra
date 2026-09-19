@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'fasttext_bin_reader.dart';
 import 'script_normalization_engine.dart';
 
 /// Result produced by the IndicLID-FastText engine.
@@ -35,6 +36,14 @@ class IndicLIDFastTextEngine {
 
   bool _isModelLoaded = false;
   bool get isModelLoaded => _isModelLoaded;
+
+  /// True only when the .bin weights were actually parsed and the
+  /// forward pass (hash -> embed -> linear -> softmax) runs in RAM.
+  /// When false, [identifyLanguage] honestly uses the heuristic fallback.
+  bool get isNeuralActive => _reader.isLoaded;
+
+  final FastTextBinReader _reader = FastTextBinReader();
+  FastTextBinReader get reader => _reader;
 
   String? _modelPath;
   String? get modelPath => _modelPath;
@@ -107,35 +116,56 @@ class IndicLIDFastTextEngine {
     },
   };
 
-  /// Checks if the IndicLID-FastText model file exists on disk.
-  Future<bool> checkModelExists() async {
+  /// Resolves the on-disk .bin path without claiming it is loaded.
+  Future<String?> resolveModelPath() async {
     try {
       final docDir = await getApplicationSupportDirectory();
-      final target = File(p.join(docDir.path, 'models', 'lid', 'indiclid_fasttext.bin'));
-      final targetRoot = File(p.join(docDir.path, 'models', 'indiclid_fasttext.bin'));
-      final targetOnnx = File(p.join(docDir.path, 'models', 'lid', 'indiclid_fasttext.onnx'));
+      final candidates = [
+        File(p.join(docDir.path, 'models', 'lid', 'indiclid_fasttext.bin')),
+        File(p.join(docDir.path, 'models', 'indiclid_fasttext.bin')),
+      ];
+      for (final f in candidates) {
+        if (await f.exists() && (await f.length()) > 1024) return f.path;
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
 
-      if (await target.exists() && (await target.length()) > 1024) {
-        _modelPath = target.path;
-        _isModelLoaded = true;
-        return true;
-      }
-      if (await targetRoot.exists() && (await targetRoot.length()) > 1024) {
-        _modelPath = targetRoot.path;
-        _isModelLoaded = true;
-        return true;
-      }
-      if (await targetOnnx.exists() && (await targetOnnx.length()) > 1024) {
-        _modelPath = targetOnnx.path;
-        _isModelLoaded = true;
-        return true;
-      }
+  /// Checks if the IndicLID-FastText model file exists on disk.
+  /// Existence alone does NOT mean neural inference is active; call [init]
+  /// to parse weights. Kept for UI compat but no longer sets loaded=true.
+  Future<bool> checkModelExists() async {
+    final path = await resolveModelPath();
+    if (path != null) {
+      _modelPath = path;
+      return true;
+    }
+    try {
+      final docDir = await getApplicationSupportDirectory();
+      _modelPath = p.join(docDir.path, 'models', 'lid', 'indiclid_fasttext.bin');
+    } catch (_) {}
+    return false;
+  }
 
-      _modelPath = target.path;
-      _isModelLoaded = false;
-      return false;
+  /// Genuinely loads FastText weights into RAM and enables neural inference.
+  /// Returns true only when the forward pass can actually run.
+  Future<bool> init() async {
+    try {
+      final path = await resolveModelPath();
+      if (path == null) {
+        _isModelLoaded = false;
+        debugPrint('[IndicLID] .bin missing; heuristic fallback active');
+        return false;
+      }
+      _modelPath = path;
+      final ok = await _reader.load(path);
+      _isModelLoaded = ok;
+      debugPrint('[IndicLID] FastText neural ${ok ? "READY ($path)" : "PARSE FAILED; fallback"}');
+      return ok;
     } catch (e) {
-      debugPrint('[IndicLID] Error checking model path: $e');
+      debugPrint('[IndicLID] init failed: $e');
       _isModelLoaded = false;
       return false;
     }
@@ -143,13 +173,16 @@ class IndicLIDFastTextEngine {
 
   /// Offloads the model from RAM when inactive.
   void unload() {
+    _reader.unload();
     _isModelLoaded = false;
-    debugPrint('[IndicLID] FastText model session offloaded from RAM');
+    debugPrint('[IndicLID] FastText weights offloaded from RAM');
   }
 
   /// Identifies the language of the given text in < 1 ms.
-  /// Uses FastText n-gram inference when model file is loaded,
-  /// with deterministic subword n-gram fallback for all 10 languages.
+  /// When FastText weights are loaded, runs the genuine forward pass
+  /// (hashed n-gram embeddings + linear + softmax) and returns its
+  /// top-1 label and probability. Otherwise honestly falls back to the
+  /// deterministic script/heuristic path below.
   LidPrediction identifyLanguage(String text) {
     final clean = text.trim();
     if (clean.isEmpty) {
@@ -160,6 +193,12 @@ class IndicLIDFastTextEngine {
         isRomanized: false,
         script: ScriptType.latin,
       );
+    }
+
+    if (_reader.isLoaded) {
+      final neural = _predictNeural(clean);
+      if (neural != null) return neural;
+      // If neural yields nothing (e.g. OOV-only), fall through honestly.
     }
 
     final script = ScriptNormalizationEngine.detectScript(clean);
@@ -240,7 +279,74 @@ class IndicLIDFastTextEngine {
     }
   }
 
+  /// Runs the real FastText model and maps its `__label__` to iTantra codes.
+  LidPrediction? _predictNeural(String clean) {
+    try {
+      final preds = _reader.predict(clean, topK: 1);
+      if (preds.isEmpty) return null;
+      final top = preds.first;
+      final mapped = _mapFastTextLabel(top.label);
+      if (mapped == null) return null;
+      final script = ScriptNormalizationEngine.detectScript(clean);
+      final code = mapped.$1;
+      final romanized = mapped.$2;
+      final name = languageNames[code] ?? code;
+      return LidPrediction(
+        languageCode: code,
+        languageName: romanized ? '$name (Romanized)' : name,
+        confidence: top.probability.clamp(0.0, 1.0),
+        isRomanized: romanized,
+        script: script,
+      );
+    } catch (e) {
+      debugPrint('[IndicLID] neural predict failed, using fallback: $e');
+      return null;
+    }
+  }
+
+  /// Maps AI4Bharat IndicLID-FTN labels to (code, isRomanized).
+  /// Covers Flores-style (`__label__hin_Deva`), ISO (`__label__hi`),
+  /// and roman (`..._Latn`) variants.
+  (String, bool)? _mapFastTextLabel(String raw) {
+    var label = raw.trim();
+    const prefix = '__label__';
+    if (label.startsWith(prefix)) label = label.substring(prefix.length);
+    label = label.toLowerCase();
+
+    // Split Flores code: hin_Deva / eng_Latn.
+    String langPart = label;
+    String scriptPart = '';
+    if (label.contains('_')) {
+      final idx = label.lastIndexOf('_');
+      langPart = label.substring(0, idx);
+      scriptPart = label.substring(idx + 1);
+    }
+    final isRoman = scriptPart == 'latn';
+
+    const iso3ToCode = {
+      'hin': 'hi', 'mar': 'mr', 'guj': 'gu', 'ben': 'bn',
+      'ory': 'or', 'tam': 'ta', 'tel': 'te', 'kan': 'kn',
+      'mal': 'ml', 'eng': 'en', 'pan': 'pa',
+    };
+    const iso1 = {'hi', 'mr', 'gu', 'bn', 'or', 'ta', 'te', 'kn', 'ml', 'en', 'pa'};
+    if (iso3ToCode.containsKey(langPart)) {
+      final code = iso3ToCode[langPart]!;
+      if (code == 'en') return ('en', false);
+      if (code == 'pa') return ('pa', isRoman);
+      return (code, isRoman);
+    }
+    if (iso1.contains(langPart)) {
+      if (langPart == 'en') return ('en', false);
+      return (langPart, isRoman);
+    }
+    // Bare roman labels like `hinglish` / `tamil_roman`.
+    if (label.contains('hinglish') || label == 'hi_latn') return ('hi', true);
+    if (label.contains('tanglish') || label == 'ta_latn') return ('ta', true);
+    return null;
+  }
+
   /// Discriminate between Hindi and Marathi in Devanagari script using FastText subword n-grams.
+  /// Heuristic fallback used ONLY when neural weights are not loaded.
   LidPrediction _discriminateDevanagari(String text) {
     final tokens = text.toLowerCase().split(RegExp(r'\s+'));
     int marathiScore = 0;

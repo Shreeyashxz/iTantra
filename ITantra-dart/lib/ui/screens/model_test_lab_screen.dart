@@ -407,10 +407,14 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
       });
 
       final micStream = await _recorder.startRecording();
+      bool isSpeechActive = false;
+
       _audioSub?.cancel();
       _audioSub = micStream.listen((chunk) {
         _totalSamplesCaptured += chunk.length;
-        speech.feedAudioData(chunk);
+        if (isSpeechActive) {
+          speech.feedAudioData(chunk);
+        }
 
         final now = DateTime.now().millisecondsSinceEpoch;
         if (now - _lastAmpUpdateMs > 80) {
@@ -432,6 +436,13 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
         if (mounted && _isVoiceDetected != isVoice) {
           setState(() => _isVoiceDetected = isVoice);
         }
+        if (isVoice && !isSpeechActive) {
+          // Flush pre-speech lookback buffer to avoid clipping first syllable
+          for (final frame in _vad.lookbackBuffer) {
+            speech.feedAudioData(frame);
+          }
+        }
+        isSpeechActive = isVoice;
       });
     } catch (e) {
       _log('Error starting audio capture for Test #$testId: $e');

@@ -70,7 +70,10 @@ void main() {
       }
     });
 
-    test('IndicXlit public model weights endpoint is reachable and valid', () async {
+    test('IndicXlit upstream is Fairseq .pt (not ONNX-runnable); app uses ONNX bundle', () async {
+      // Upstream checkpoint exists but MUST NOT be downloaded as `.onnx`.
+      // The app downloads a converted encoder+decoder ONNX bundle instead
+      // (see scripts/export_indicxlit_onnx.py + LanguagePackManager.indicXlitOnnxBaseUrl).
       final client = HttpClient();
       try {
         final req = await client.getUrl(

@@ -155,6 +155,19 @@ class LanguagePackManager {
         }
       }
 
+      // Remove legacy fake Xlit checkpoints: a Fairseq `.pt` renamed to
+      // `.onnx` can never run in ONNX Runtime. The real bundle lives at
+      // `xlit/int8/encoder_model.onnx` + `decoder_model.onnx`.
+      for (final legacyRel in ['indicxlit.onnx', 'xlit/indicxlit.onnx']) {
+        try {
+          final legacy = File(p.join(primaryDir.path, legacyRel));
+          if (await legacy.exists()) {
+            await legacy.delete();
+            debugPrint('[LanguagePackManager] Removed legacy fake Xlit file: $legacyRel');
+          }
+        } catch (_) {}
+      }
+
       final candidates = await getCandidateModelDirectories();
       for (final candidate in candidates) {
         if (candidate.path == primaryDir.path || !await candidate.exists()) {
@@ -164,6 +177,10 @@ class LanguagePackManager {
         await for (final entity in candidate.list(recursive: true, followLinks: false)) {
           if (entity is File) {
             final relPath = p.relative(entity.path, from: candidate.path);
+            // Never re-import legacy fake Xlit files.
+            if (relPath == 'indicxlit.onnx' || relPath == 'xlit/indicxlit.onnx') {
+              continue;
+            }
             final ext = p.extension(entity.path).toLowerCase();
             if (!{'.onnx', '.model', '.txt', '.json', '.data'}.contains(ext)) {
               continue;
@@ -341,13 +358,19 @@ class LanguagePackManager {
     }
   }
 
-  /// Checks if AI4Bharat IndicXlit neural model weights exist in local models storage
+  /// Checks if a genuine IndicXlit encoder+decoder ONNX bundle exists.
+  /// Legacy single-file `indicxlit.onnx` (a renamed Fairseq `.pt` that could
+  /// never run in ONNX Runtime) is explicitly NOT accepted.
   Future<bool> isIndicXlitAvailable() async {
     final dir = await getModelsDirectory();
-    final model = File(p.join(dir.path, 'indicxlit.onnx'));
-    final modelSub = File(p.join(dir.path, 'xlit', 'indicxlit.onnx'));
-    if (await model.exists() && (await model.length()) > 1024) return true;
-    if (await modelSub.exists() && (await modelSub.length()) > 1024) return true;
+    final enc = File(p.join(dir.path, 'xlit', 'int8', 'encoder_model.onnx'));
+    final dec = File(p.join(dir.path, 'xlit', 'int8', 'decoder_model.onnx'));
+    if (await enc.exists() &&
+        await dec.exists() &&
+        (await enc.length()) > 1024 &&
+        (await dec.length()) > 1024) {
+      return true;
+    }
     return false;
   }
 
@@ -844,31 +867,52 @@ class LanguagePackManager {
     }
   }
 
-  /// Downloads AI4Bharat IndicXlit Neural Weights (~35 MB ONNX model)
+  /// Base URL for the genuine IndicXlit encoder+decoder ONNX bundle.
+  /// The upstream `ai4bharat/IndicXlit` checkpoint is a Fairseq `.pt` file
+  /// and CANNOT run in ONNX Runtime. Publish the converted bundle produced
+  /// by `scripts/export_indicxlit_onnx.py` (INT8) and set the URL below.
+  static const String indicXlitOnnxBaseUrl =
+      'https://huggingface.co/ai4bharat/IndicXlit-ONNX/resolve/main/en-indic-int8';
+
+  /// Downloads the genuine IndicXlit encoder+decoder ONNX bundle.
+  /// Never downloads the Fairseq `.pt` nor renames it to `.onnx`.
   Future<bool> downloadIndicXlit() async {
     final modelsDir = await getModelsDirectory();
-    final targetModel = File(p.join(modelsDir.path, 'indicxlit.onnx'));
+    final xlitDir = Directory(p.join(modelsDir.path, 'xlit', 'int8'));
+    if (!await xlitDir.exists()) await xlitDir.create(recursive: true);
 
-    if (await targetModel.exists() && (await targetModel.length()) > 1024) {
+    final enc = File(p.join(xlitDir.path, 'encoder_model.onnx'));
+    final dec = File(p.join(xlitDir.path, 'decoder_model.onnx'));
+    final vocab = File(p.join(xlitDir.path, 'vocab.json'));
+
+    if (await enc.exists() &&
+        await dec.exists() &&
+        (await enc.length()) > 1024 &&
+        (await dec.length()) > 1024) {
       _emitState(const DownloadStateCompleted('AI4Bharat IndicXlit Neural Ready'));
       return true;
     }
 
-    const xlitUrl =
-        'https://huggingface.co/ai4bharat/IndicXlit/resolve/main/indicxlit-en-indic-v1.0/transformer/indicxlit.pt';
-
     try {
-      _emitState(const DownloadStateDownloading('AI4Bharat IndicXlit Neural Weights (~35 MB)', 0, modelKey: 'indicxlit'));
-
-      await _downloadFileWithRedirects(xlitUrl, targetModel, (percent) {
-        _emitState(DownloadStateDownloading('IndicXlit Neural Weights', percent, modelKey: 'indicxlit'));
+      _emitState(const DownloadStateDownloading('AI4Bharat IndicXlit ONNX bundle', 0, modelKey: 'indicxlit'));
+      await _downloadFileWithRedirects('$indicXlitOnnxBaseUrl/encoder_model.onnx', enc, (percent) {
+        _emitState(DownloadStateDownloading('IndicXlit Encoder', percent, modelKey: 'indicxlit'));
       });
-
+      await _downloadFileWithRedirects('$indicXlitOnnxBaseUrl/decoder_model.onnx', dec, (percent) {
+        _emitState(DownloadStateDownloading('IndicXlit Decoder', percent, modelKey: 'indicxlit'));
+      });
+      try {
+        await _downloadFileWithRedirects('$indicXlitOnnxBaseUrl/vocab.json', vocab, (_) {});
+      } catch (_) {
+        // Vocab is optional; char fallback works without it.
+      }
       _emitState(const DownloadStateCompleted('AI4Bharat IndicXlit Neural Ready'));
       return true;
     } catch (e) {
-      debugPrint('Error downloading IndicXlit neural model: $e');
-      _emitState(DownloadStateError('IndicXlit download failed: $e'));
+      debugPrint('Error downloading IndicXlit ONNX bundle: $e. '
+          'If the bundle is not yet published, run scripts/export_indicxlit_onnx.py '
+          'to convert indicxlit.pt -> ONNX and host it at indicXlitOnnxBaseUrl.');
+      _emitState(DownloadStateError('IndicXlit ONNX bundle download failed: $e'));
       return false;
     }
   }
@@ -876,13 +920,18 @@ class LanguagePackManager {
   Future<bool> deleteIndicXlit() async {
     try {
       final modelsDir = await getModelsDirectory();
-      final targetFile = File(p.join(modelsDir.path, 'indicxlit.onnx'));
-      final targetSubdir = File(p.join(modelsDir.path, 'xlit', 'indicxlit.onnx'));
-      if (await targetFile.exists()) {
-        await targetFile.delete();
-      }
-      if (await targetSubdir.exists()) {
-        await targetSubdir.delete();
+      // Remove current bundle.
+      final bundleDir = Directory(p.join(modelsDir.path, 'xlit'));
+      if (await bundleDir.exists()) await bundleDir.delete(recursive: true);
+      // Clean up legacy fake single-file checkpoints (renamed .pt files
+      // that could never run inference) so they are never mistaken as ready.
+      for (final legacy in [
+        File(p.join(modelsDir.path, 'indicxlit.onnx')),
+        File(p.join(modelsDir.path, 'xlit', 'indicxlit.onnx')),
+      ]) {
+        try {
+          if (await legacy.exists()) await legacy.delete();
+        } catch (_) {}
       }
       _emitState(const DownloadStateCompleted('IndicXlit model deleted'));
       return true;

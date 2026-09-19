@@ -43,6 +43,10 @@ android {
             pickFirsts += "**/libonnxruntime.so"
             pickFirsts += "**/libc++_shared.so"
         }
+        jniLibs {
+            pickFirsts += "**/libonnxruntime.so"
+            pickFirsts += "**/libc++_shared.so"
+        }
     }
 }
 

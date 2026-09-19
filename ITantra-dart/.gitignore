@@ -46,6 +46,9 @@ app.*.map.json
 
 # AI / Neural Model binaries (exceed GitHub limits)
 *.onnx
+*.pt
+*.bin
 converted_models/*.onnx
 converted_models_backup/
+xlit-src/**/*.pt
 

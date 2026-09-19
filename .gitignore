@@ -16,6 +16,13 @@ local.properties
 
 # AI / Neural Model binaries (exceed GitHub 100MB limit)
 *.onnx
+*.pt
+*.bin
 **/converted_models/*.onnx
 **/converted_models_backup/
+**/transformer/*.pt
 
+# Crash logs
+*.log
+hs_err_*.log
+replay_*.log

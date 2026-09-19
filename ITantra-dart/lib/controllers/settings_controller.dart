@@ -2,6 +2,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../data/app_database.dart';
 import '../data/entities/user_settings_entity.dart';
+import '../speech/indic_xlit_engine.dart';
+import '../speech/indiclid_fasttext_engine.dart';
 import '../speech/language_pack_manager.dart';
 import '../speech/neural_mt_engine.dart';
 import '../speech/script_normalization_engine.dart';
@@ -107,6 +109,14 @@ class SettingsController extends ChangeNotifier {
     if (_isMtIndicIndicReady || _isMtIndicEnReady) {
       await NeuralMtEngine.instance.init();
     }
+    // Genuinely activate neural LID/Xlit when weights exist; otherwise they
+    // stay in honest heuristic fallback mode (isNeuralActive == false).
+    if (_isLidReady) {
+      await IndicLIDFastTextEngine.instance.init();
+    }
+    if (_isIndicXlitReady) {
+      await IndicXlitEngine.instance.init();
+    }
     notifyListeners();
   }
 
@@ -170,6 +180,7 @@ class SettingsController extends ChangeNotifier {
   }
 
   Future<void> deleteIndicXlit() async {
+    IndicXlitEngine.instance.unload();
     await languagePackManager.deleteIndicXlit();
     await checkModelStatus();
   }
@@ -180,6 +191,7 @@ class SettingsController extends ChangeNotifier {
   }
 
   Future<void> deleteLid() async {
+    IndicLIDFastTextEngine.instance.unload();
     await languagePackManager.deleteLid();
     await checkModelStatus();
   }
