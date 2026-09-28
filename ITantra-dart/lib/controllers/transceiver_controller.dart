@@ -5,13 +5,16 @@ import '../alerts/alert_broadcaster.dart';
 import '../alerts/alert_receiver.dart';
 import '../data/app_database.dart';
 import '../data/entities/message_entity.dart';
+import '../data/entities/user_settings_entity.dart';
 import '../network/transceiver_manager.dart';
 import '../network/wifi_mesh_manager.dart';
-import '../proto/transceiver_packet.dart';
+
 import '../speech/comm_pipeline.dart';
 import '../speech/indic_trans_engine.dart';
 import '../speech/script_normalization_engine.dart';
 import '../speech/sherpa_onnx_speech_engine.dart';
+import 'ptt_manager.dart';
+import 'incoming_packet_handler.dart';
 
 class TransceiverController extends ChangeNotifier {
   final CommPipeline commPipeline;
@@ -23,7 +26,10 @@ class TransceiverController extends ChangeNotifier {
   final AppDatabase database;
   final IndicTransEngine transEngine = IndicTransEngine();
 
-  late final String deviceId;
+  late final PttManager _pttManager;
+  late final IncomingPacketHandler _incomingPacketHandler;
+
+  late String deviceId;
   List<MessageEntity> _messages = [];
   List<MessageEntity> get messages => _messages;
 
@@ -33,35 +39,23 @@ class TransceiverController extends ChangeNotifier {
   String _connectionStatus = 'Disconnected';
   String get connectionStatus => _connectionStatus;
 
-  bool _isTransmitting = false;
-  bool get isTransmitting => _isTransmitting;
-
   String _selectedLanguage = 'hi';
   String get selectedLanguage => _selectedLanguage;
 
   bool _isMtEnabled = true;
   bool get isMtEnabled => _isMtEnabled;
 
-  bool _isVadMode = false;
-  bool get isVadMode => _isVadMode;
-
-  bool _isVoiceDetected = false;
-  bool get isVoiceDetected => _isVoiceDetected;
-
   int? get linkRttMs => transceiverManager.averageRttMs;
 
-  /// Whether the STT engine is loaded and ready for PTT
   bool get isSttReady => speechEngine.isSttLoaded;
 
-  /// Last PTT error message (null when no error)
-  String? _pttError;
-  String? get pttError => _pttError;
+  // --- Delegated PTT properties ---
+  bool get isTransmitting => _pttManager.isTransmitting;
+  bool get isVadMode => _pttManager.isVadMode;
+  bool get isVoiceDetected => _pttManager.isVoiceDetected;
+  String? get pttError => _pttManager.pttError;
+  bool get isSttInitializing => _pttManager.isSttInitializing;
 
-  /// Whether STT is currently being initialized
-  bool _isSttInitializing = false;
-  bool get isSttInitializing => _isSttInitializing;
-
-  /// Active TTS engine type ('AI4BHARAT_RASA', 'META_MMS', or 'OS_NATIVE')
   String _ttsEngineType = 'AI4BHARAT_RASA';
   String get ttsEngineType => _ttsEngineType;
   bool get isRasa => _ttsEngineType == 'AI4BHARAT_RASA';
@@ -88,7 +82,6 @@ class TransceiverController extends ChangeNotifier {
     }
   }
 
-  /// Active Script Normalizer Mode ('ADVANCED', 'LEGACY_RULE_BASED', or 'NEURAL_INDIC_XLIT')
   String _normalizerMode = 'ADVANCED';
   String get normalizerMode => _normalizerMode;
   bool get isAdvancedNormalizer => _normalizerMode == 'ADVANCED';
@@ -127,11 +120,11 @@ class TransceiverController extends ChangeNotifier {
     }
   }
 
-  StreamSubscription<TransceiverPacket>? _packetSubscription;
   StreamSubscription<AlertEvent?>? _alertSubscription;
   StreamSubscription<String>? _statusSubscription;
   StreamSubscription<List<MessageEntity>>? _dbSubscription;
   StreamSubscription<dynamic>? _statsSubscription;
+  StreamSubscription<UserSettingsEntity>? _settingsSubscription;
 
   TransceiverController({
     required this.commPipeline,
@@ -142,14 +135,25 @@ class TransceiverController extends ChangeNotifier {
     required this.speechEngine,
     required this.database,
   }) {
-    deviceId = 'DEV_${Random().nextInt(90000) + 10000}';
+    deviceId = 'DEV_${Random().nextInt(90000) + 10000}'; // Fallback until async init completes
     _connectionStatus = transceiverManager.currentStatusString;
+    _pttManager = PttManager(commPipeline: commPipeline, speechEngine: speechEngine, database: database);
+    _pttManager.addListener(notifyListeners);
+    _incomingPacketHandler = IncomingPacketHandler(transceiverManager: transceiverManager, database: database, speechEngine: speechEngine, transEngine: transEngine);
     _init();
   }
 
   Future<void> _init() async {
     // Load settings including MT preference and TTS engine type
     final initialSettings = await database.getSettings();
+    if (initialSettings.deviceId.isEmpty) {
+      deviceId = 'DEV_${Random().nextInt(90000) + 10000}';
+      await database.saveSettings(initialSettings.copyWith(deviceId: deviceId));
+    } else {
+      deviceId = initialSettings.deviceId;
+    }
+    
+    _selectedLanguage = initialSettings.preferredLanguage;
     _isMtEnabled = initialSettings.isMtEnabled;
     _ttsEngineType = initialSettings.ttsEngineType;
     _normalizerMode = initialSettings.normalizerMode;
@@ -166,11 +170,44 @@ class TransceiverController extends ChangeNotifier {
         break;
     }
 
-    // Load initial message history
     _messages = await database.getAllMessages();
     notifyListeners();
 
-    // ── Start Wi-Fi Mesh presence beaconing automatically on startup ──
+    _settingsSubscription = database.settingsStream.listen((settings) {
+      bool changed = false;
+      if (_selectedLanguage != settings.preferredLanguage) {
+        _selectedLanguage = settings.preferredLanguage;
+        changed = true;
+      }
+      if (_isMtEnabled != settings.isMtEnabled) {
+        _isMtEnabled = settings.isMtEnabled;
+        changed = true;
+      }
+      if (_ttsEngineType != settings.ttsEngineType) {
+        _ttsEngineType = settings.ttsEngineType;
+        changed = true;
+      }
+      if (_normalizerMode != settings.normalizerMode) {
+        _normalizerMode = settings.normalizerMode;
+        switch (_normalizerMode) {
+          case 'LEGACY_RULE_BASED':
+            ScriptNormalizationEngine.activeMode = NormalizerMode.legacyRuleBased;
+            break;
+          case 'NEURAL_INDIC_XLIT':
+            ScriptNormalizationEngine.activeMode = NormalizerMode.neuralIndicXlit;
+            break;
+          case 'ADVANCED':
+          default:
+            ScriptNormalizationEngine.activeMode = NormalizerMode.advanced;
+            break;
+        }
+        changed = true;
+      }
+      if (changed) {
+        notifyListeners();
+      }
+    });
+
     try {
       debugPrint('[TransceiverController] Auto-starting mesh beacon service on startup...');
       unawaited(meshManager.startBeaconService(
@@ -180,83 +217,18 @@ class TransceiverController extends ChangeNotifier {
       debugPrint('[TransceiverController] Beacon service start notice: $e');
     }
 
-    // ── Auto-initialize STT engine so PTT works immediately ──
-    _isSttInitializing = true;
-    notifyListeners();
+    _pttManager.setSttInitializing(true);
     try {
       final sttOk = await speechEngine.initStt();
       debugPrint('[TransceiverController] STT auto-init: ${sttOk ? "SUCCESS" : "FAILED (models not downloaded?)"}');
     } catch (e) {
       debugPrint('[TransceiverController] STT auto-init error: $e');
     }
-    _isSttInitializing = false;
-    notifyListeners();
+    _pttManager.setSttInitializing(false);
 
-    // Listen for incoming packets
-    _packetSubscription = transceiverManager.incomingPackets.listen((packet) async {
-      final entity = MessageEntity(
-        senderId: packet.senderId,
-        text: packet.transcript,
-        languageCode: packet.languageCode,
-        type: packet.type.name.toUpperCase(),
-        timestamp: packet.timestampMs,
-        isIncoming: true,
-      );
-      await database.insertMessage(entity);
-      _messages = await database.getAllMessages();
-      notifyListeners();
+    // Start incoming packet processor
+    _incomingPacketHandler.start(() => _selectedLanguage, () => _isMtEnabled, () => _ttsEngineType);
 
-      if (packet.type == PacketType.voice) {
-        final settings = await database.getSettings();
-        if (settings.autoPlayAudio) {
-          String textToSpeak = packet.transcript;
-
-          // Determine playback language:
-          // If MT is enabled and languages differ -> translate to receiver's selected language
-          // If MT is disabled -> output voice in the sender's original language (packet.languageCode)
-          final String speechLang = (_isMtEnabled && packet.languageCode != _selectedLanguage)
-              ? _selectedLanguage
-              : packet.languageCode;
-
-          final effectiveEngine = _ttsEngineType;
-          final ttsWarmUp = speechEngine.initTts(speechLang, effectiveEngine);
-
-          if (_isMtEnabled && packet.languageCode != _selectedLanguage) {
-            try {
-              final translationFuture = transEngine.translate(
-                text: packet.transcript,
-                sourceLang: packet.languageCode,
-                targetLang: _selectedLanguage,
-              );
-              // Wait for MT translation and TTS engine warm-up concurrently
-              final results = await Future.wait([translationFuture, ttsWarmUp]);
-              textToSpeak = results[0] as String;
-            } catch (e) {
-              debugPrint('[TransceiverController] MT translation error: $e');
-              await ttsWarmUp;
-            }
-          } else {
-            // MT is bypassed or languages match — zero translation overhead!
-            await ttsWarmUp;
-          }
-
-          textToSpeak = ScriptNormalizationEngine.prepareTextForTts(
-            textToSpeak,
-            speechLang,
-            effectiveEngine,
-          );
-
-          await speechEngine.synthesizeSpeech(
-            textToSpeak,
-            speechLang,
-            settings.ttsGender,
-            effectiveEngine,
-          );
-        }
-      }
-    });
-
-    // B1: Warm-up active language TTS engine in background after initialization
     unawaited(
       database.getSettings().then((settings) {
         speechEngine.initTts(_selectedLanguage, _ttsEngineType);
@@ -265,147 +237,34 @@ class TransceiverController extends ChangeNotifier {
       }),
     );
 
-    // Listen for alerts
     _alertSubscription = alertReceiver.activeAlert.listen((alert) {
       _activeAlert = alert;
       notifyListeners();
     });
 
-    // Listen for real connection status changes from TransceiverManager
     _statusSubscription = transceiverManager.connectionState.listen((status) {
       _connectionStatus = status;
       notifyListeners();
     });
 
-    // Listen for database updates
     _dbSubscription = database.messagesStream.listen((list) {
       _messages = list;
       notifyListeners();
     });
 
-    // Listen for network stats updates (RTT / Latency)
     _statsSubscription = transceiverManager.statsStream.listen((_) {
       notifyListeners();
     });
   }
 
-  /// Handles PTT button press — ensures STT is loaded before starting mic+pipeline
-  Future<void> onPttPressed() async {
-    if (_isVadMode) return; // In VAD auto-mode, PTT is automatic
-    if (_isTransmitting) return;
+  // --- Delegated PTT Actions ---
+  Future<void> onPttPressed() => _pttManager.onPttPressed(deviceId: deviceId, selectedLanguage: _selectedLanguage);
+  Future<void> onPttReleased() => _pttManager.onPttReleased(deviceId: deviceId, selectedLanguage: _selectedLanguage);
+  void clearPttError() => _pttManager.clearPttError();
+  void toggleVadMode() => _pttManager.toggleVadMode(deviceId: deviceId, selectedLanguage: _selectedLanguage);
 
-    // Clear any previous error
-    _pttError = null;
-
-    // Guard: ensure STT model is loaded
-    if (!speechEngine.isSttLoaded) {
-      debugPrint('[PTT] STT not loaded — attempting on-the-fly init...');
-      _isSttInitializing = true;
-      notifyListeners();
-      try {
-        final ok = await speechEngine.initStt();
-        _isSttInitializing = false;
-        if (!ok) {
-          _pttError = 'STT model not loaded. Download from Settings → Language Packs.';
-          notifyListeners();
-          debugPrint('[PTT] BLOCKED: STT init failed — models not downloaded');
-          return;
-        }
-      } catch (e) {
-        _isSttInitializing = false;
-        _pttError = 'STT initialization error: $e';
-        notifyListeners();
-        return;
-      }
-    }
-
-    _isTransmitting = true;
-    notifyListeners();
-    debugPrint('[PTT] ▶ Recording started (lang=$_selectedLanguage, stt=${speechEngine.loadedSttVariant})');
-
-    await commPipeline.startTransmission(
-      senderId: deviceId,
-      languageCode: _selectedLanguage,
-      onTranscript: (text) async {
-        // Save live/partial transcripts to message history
-        if (text.trim().isNotEmpty) {
-          debugPrint('[PTT] Live transcript: "$text"');
-        }
-      },
-      onVoiceDetected: (isDetected) {
-        _isVoiceDetected = isDetected;
-        notifyListeners();
-      },
-    );
-  }
-
-  /// Handles PTT button release — stops recording, transcribes, sends packet, saves to DB
-  Future<void> onPttReleased() async {
-    if (_isVadMode) return;
-    if (!_isTransmitting) return;
-
-    _isTransmitting = false;
-    _isVoiceDetected = false;
-    notifyListeners();
-    debugPrint('[PTT] ■ Recording stopped — finalizing STT...');
-
-    final transcript = await commPipeline.stopTransmissionAndGetTranscript();
-
-    if (transcript.isNotEmpty) {
-      debugPrint('[PTT] Final transcript: "$transcript" — saving to DB');
-      final entity = MessageEntity(
-        senderId: deviceId,
-        text: transcript,
-        languageCode: _selectedLanguage,
-        type: 'VOICE',
-        timestamp: DateTime.now().millisecondsSinceEpoch,
-        isIncoming: false,
-      );
-      await database.insertMessage(entity);
-      _messages = await database.getAllMessages();
-      notifyListeners();
-    } else {
-      debugPrint('[PTT] No speech detected — nothing sent');
-    }
-  }
-
-  /// Clears the PTT error state (called by UI after displaying)
-  void clearPttError() {
-    _pttError = null;
-    notifyListeners();
-  }
-
-  /// Toggles between PTT (Push-To-Talk) and VAD (Hands-Free Voice Activity Detection) mode
-  void toggleVadMode() {
-    _isVadMode = !_isVadMode;
-    if (_isVadMode) {
-      // Start continuous VAD auto-detection
-      commPipeline.startVadAutoMode(
-        senderId: deviceId,
-        languageCode: _selectedLanguage,
-        onTranscript: (text) {
-          // Live preview or partial transcripts
-        },
-        onVoiceDetected: (isDetected) {
-          _isVoiceDetected = isDetected;
-          _isTransmitting = commPipeline.isTransmitting;
-          notifyListeners();
-        },
-      );
-    } else {
-      // Stop continuous VAD and return to manual PTT
-      commPipeline.stopVadAutoMode();
-      _isTransmitting = false;
-      _isVoiceDetected = false;
-    }
-    notifyListeners();
-  }
-
-
-  /// Broadcasts a voice or quiet-mode utterance through the mesh transceiver pipeline
   Future<void> sendUtterance(String text) async {
     if (text.trim().isEmpty) return;
-
     final entity = MessageEntity(
       senderId: deviceId,
       text: text,
@@ -415,19 +274,21 @@ class TransceiverController extends ChangeNotifier {
       isIncoming: false,
     );
     await database.insertMessage(entity);
-
     await commPipeline.sendUtterance(
       senderId: deviceId,
       languageCode: _selectedLanguage,
       text: text,
     );
-    _messages = await database.getAllMessages();
-    notifyListeners();
   }
 
   void setLanguage(String code) {
     _selectedLanguage = code;
     notifyListeners();
+    database.getSettings().then((s) {
+      database.saveSettings(s.copyWith(preferredLanguage: code));
+    }).catchError((e) {
+      debugPrint('[TransceiverController] Error saving language setting: $e');
+    });
   }
 
   Future<void> setMtEnabled(bool enabled) async {
@@ -447,8 +308,6 @@ class TransceiverController extends ChangeNotifier {
     setMtEnabled(!_isMtEnabled);
   }
 
-  /// Triggers a live Just-In-Time (JIT) end-to-end pipeline run:
-  /// Text -> Machine Translation -> Mesh Transmission -> Neural TTS Synthesis
   Future<void> triggerJitPipeline([String? customText]) async {
     final text = customText ?? (selectedLanguage == 'hi' ? 'आपातकालीन सहायता की आवश्यकता है' : 'Emergency assistance required immediately');
     debugPrint('[JIT Pipeline] Executing Just-In-Time pipeline for: "$text"');
@@ -472,8 +331,6 @@ class TransceiverController extends ChangeNotifier {
       isIncoming: false,
     );
     await database.insertMessage(entity);
-    _messages = await database.getAllMessages();
-    notifyListeners();
   }
 
   void dismissAlert() {
@@ -488,11 +345,14 @@ class TransceiverController extends ChangeNotifier {
 
   @override
   void dispose() {
-    _packetSubscription?.cancel();
+    _incomingPacketHandler.dispose();
+    _pttManager.removeListener(notifyListeners);
+    _pttManager.dispose();
     _alertSubscription?.cancel();
     _statusSubscription?.cancel();
     _dbSubscription?.cancel();
     _statsSubscription?.cancel();
+    _settingsSubscription?.cancel();
     super.dispose();
   }
 }

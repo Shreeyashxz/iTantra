@@ -57,6 +57,7 @@ class SettingsController extends ChangeNotifier {
   List<LanguageMetadata> get languages => LanguagePackManager.supportedLanguages;
 
   StreamSubscription<DownloadState>? _downloadSubscription;
+  StreamSubscription<UserSettingsEntity>? _settingsSubscription;
 
   SettingsController({
     required this.database,
@@ -68,7 +69,29 @@ class SettingsController extends ChangeNotifier {
 
   Future<void> _init() async {
     _settings = await database.getSettings();
-    switch (_settings.normalizerMode) {
+    _applySettings(_settings);
+    await checkModelStatus();
+    notifyListeners();
+
+    _settingsSubscription = database.settingsStream.listen((newSettings) {
+      if (_settings.id != newSettings.id || _settings.toMap().toString() != newSettings.toMap().toString()) {
+        _settings = newSettings;
+        _applySettings(newSettings);
+        notifyListeners();
+      }
+    });
+
+    _downloadSubscription = languagePackManager.downloadState.listen((state) async {
+      _downloadState = state;
+      if (state is DownloadStateCompleted) {
+        await checkModelStatus();
+      }
+      notifyListeners();
+    });
+  }
+
+  void _applySettings(UserSettingsEntity s) {
+    switch (s.normalizerMode) {
       case 'LEGACY_RULE_BASED':
         ScriptNormalizationEngine.activeMode = NormalizerMode.legacyRuleBased;
         break;
@@ -80,16 +103,6 @@ class SettingsController extends ChangeNotifier {
         ScriptNormalizationEngine.activeMode = NormalizerMode.advanced;
         break;
     }
-    await checkModelStatus();
-    notifyListeners();
-
-    _downloadSubscription = languagePackManager.downloadState.listen((state) async {
-      _downloadState = state;
-      if (state is DownloadStateCompleted) {
-        await checkModelStatus();
-      }
-      notifyListeners();
-    });
   }
 
   Future<void> checkModelStatus() async {
@@ -329,19 +342,6 @@ class SettingsController extends ChangeNotifier {
   Future<void> updateNormalizerMode(String mode) async {
     _settings = _settings.copyWith(normalizerMode: mode);
     await database.saveSettings(_settings);
-    switch (mode) {
-      case 'LEGACY_RULE_BASED':
-        ScriptNormalizationEngine.activeMode = NormalizerMode.legacyRuleBased;
-        break;
-      case 'NEURAL_INDIC_XLIT':
-        ScriptNormalizationEngine.activeMode = NormalizerMode.neuralIndicXlit;
-        break;
-      case 'ADVANCED':
-      default:
-        ScriptNormalizationEngine.activeMode = NormalizerMode.advanced;
-        break;
-    }
-    notifyListeners();
   }
 
   Future<void> toggleNormalizerMode() async {
@@ -359,6 +359,7 @@ class SettingsController extends ChangeNotifier {
   @override
   void dispose() {
     _downloadSubscription?.cancel();
+    _settingsSubscription?.cancel();
     super.dispose();
   }
 }

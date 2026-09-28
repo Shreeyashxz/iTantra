@@ -7,9 +7,15 @@ class AudioRecorderService {
   AudioRecorder? _audioRecorder;
   AudioRecorder get _recorder => _audioRecorder ??= AudioRecorder();
   StreamSubscription<List<int>>? _recordSubscription;
-  final _pcmStreamController = StreamController<Int16List>.broadcast();
+  StreamController<Int16List> _pcmStreamController = StreamController<Int16List>.broadcast();
 
-  Stream<Int16List> get pcmStream => _pcmStreamController.stream;
+  Stream<Int16List> get pcmStream {
+    if (_pcmStreamController.isClosed) {
+      _pcmStreamController = StreamController<Int16List>.broadcast();
+    }
+    return _pcmStreamController.stream;
+  }
+
   bool _isRecording = false;
   bool get isRecording => _isRecording;
 
@@ -49,7 +55,15 @@ class AudioRecorderService {
   }
 
   Future<Stream<Int16List>> startRecording() async {
+    if (_pcmStreamController.isClosed) {
+      _pcmStreamController = StreamController<Int16List>.broadcast();
+    }
+
     try {
+      if (_isRecording) {
+        return _pcmStreamController.stream;
+      }
+
       final recorder = _recorder;
       if (await recorder.hasPermission()) {
         final stream = await recorder.startStream(
@@ -64,9 +78,12 @@ class AudioRecorderService {
         _carryByte = null;
         _recordSubscription?.cancel();
         _recordSubscription = stream.listen((byteChunk) {
+          if (!_isRecording || _pcmStreamController.isClosed) return;
           final int16List = processPcmChunk(byteChunk);
           if (int16List != null && int16List.isNotEmpty) {
-            _pcmStreamController.add(int16List);
+            if (!_pcmStreamController.isClosed) {
+              _pcmStreamController.add(int16List);
+            }
           }
         });
       }
@@ -80,8 +97,9 @@ class AudioRecorderService {
     try {
       _isRecording = false;
       _carryByte = null;
-      await _recordSubscription?.cancel();
+      final sub = _recordSubscription;
       _recordSubscription = null;
+      await sub?.cancel();
       await _audioRecorder?.stop();
     } catch (e) {
       debugPrint('Error stopping audio recorder: $e');
@@ -89,9 +107,12 @@ class AudioRecorderService {
   }
 
   void dispose() {
+    _isRecording = false;
     stopRecording();
     _audioRecorder?.dispose();
     _audioRecorder = null;
-    _pcmStreamController.close();
+    if (!_pcmStreamController.isClosed) {
+      _pcmStreamController.close();
+    }
   }
 }

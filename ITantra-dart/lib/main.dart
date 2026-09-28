@@ -9,6 +9,7 @@ import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'alerts/alert_broadcaster.dart';
+import 'speech/indic_trans_engine.dart';
 import 'alerts/alert_receiver.dart';
 import 'controllers/history_controller.dart';
 import 'controllers/peer_controller.dart';
@@ -89,6 +90,8 @@ void main() async {
   } catch (e) {
     debugPrint('[Init] sherpa-onnx initBindings notice: $e');
   }
+
+  await IndicTransEngine.loadLexicon();
 
   // Core singletons (matching Hilt AppModule / SpeechModule / TransportModule / DatabaseModule)
   final database = AppDatabase.instance;

@@ -52,3 +52,8 @@ converted_models/*.onnx
 converted_models_backup/
 xlit-src/**/*.pt
 
+# Junk files and conversion scripts
+*.txt
+!CMakeLists.txt
+converted_models/
+xlit-src/

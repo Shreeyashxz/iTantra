@@ -15,6 +15,9 @@ class AppDatabase {
   final _messagesStreamController = StreamController<List<MessageEntity>>.broadcast();
   Stream<List<MessageEntity>> get messagesStream => _messagesStreamController.stream;
 
+  final _settingsStreamController = StreamController<UserSettingsEntity>.broadcast();
+  Stream<UserSettingsEntity> get settingsStream => _settingsStreamController.stream;
+
   AppDatabase._init();
 
   Future<Database> get database async {
@@ -89,7 +92,8 @@ class AppDatabase {
         isMtEnabled INTEGER NOT NULL DEFAULT 1,
         sttPrecision TEXT NOT NULL DEFAULT 'INT8',
         mtPrecision TEXT NOT NULL DEFAULT 'INT8',
-        normalizerMode TEXT NOT NULL DEFAULT 'ADVANCED'
+        normalizerMode TEXT NOT NULL DEFAULT 'ADVANCED',
+        deviceId TEXT NOT NULL DEFAULT ''
       )
     ''');
 
@@ -170,6 +174,9 @@ class AppDatabase {
       if (!existingCols.contains('normalizerMode')) {
         await db.execute("ALTER TABLE user_settings ADD COLUMN normalizerMode TEXT NOT NULL DEFAULT 'ADVANCED'");
       }
+      if (!existingCols.contains('deviceId')) {
+        await db.execute("ALTER TABLE user_settings ADD COLUMN deviceId TEXT NOT NULL DEFAULT ''");
+      }
     } catch (e) {
       debugPrint('[Database] Schema self-healing notice: $e');
     }
@@ -221,17 +228,21 @@ class AppDatabase {
   Future<UserSettingsEntity> getSettings() async {
     final db = await database;
     final maps = await db.query('user_settings', where: 'id = ?', whereArgs: [1]);
+    UserSettingsEntity settings;
     if (maps.isNotEmpty) {
-      return UserSettingsEntity.fromMap(maps.first);
+      settings = UserSettingsEntity.fromMap(maps.first);
+    } else {
+      settings = UserSettingsEntity();
+      await db.insert('user_settings', settings.toMap());
     }
-    final defaultSettings = UserSettingsEntity();
-    await db.insert('user_settings', defaultSettings.toMap());
-    return defaultSettings;
+    _settingsStreamController.add(settings);
+    return settings;
   }
 
   Future<void> saveSettings(UserSettingsEntity settings) async {
     final db = await database;
     await db.insert('user_settings', settings.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+    _settingsStreamController.add(settings);
   }
 
   Future<void> close() async {
@@ -240,5 +251,6 @@ class AppDatabase {
       await db.close();
     }
     _messagesStreamController.close();
+    _settingsStreamController.close();
   }
 }

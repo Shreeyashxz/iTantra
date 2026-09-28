@@ -73,5 +73,12 @@ void main() {
       final pcm = recorder.processPcmChunk([]);
       expect(pcm, isNull);
     });
+
+    test('pcmStream revives and is usable even after dispose() is called', () {
+      recorder.dispose();
+      final stream = recorder.pcmStream;
+      expect(stream, isNotNull);
+      expect(recorder.isRecording, isFalse);
+    });
   });
 }
