@@ -98,18 +98,7 @@ class TransceiverController extends ChangeNotifier {
       next = 'ADVANCED';
     }
     _normalizerMode = next;
-    switch (next) {
-      case 'LEGACY_RULE_BASED':
-        ScriptNormalizationEngine.activeMode = NormalizerMode.legacyRuleBased;
-        break;
-      case 'NEURAL_INDIC_XLIT':
-        ScriptNormalizationEngine.activeMode = NormalizerMode.neuralIndicXlit;
-        break;
-      case 'ADVANCED':
-      default:
-        ScriptNormalizationEngine.activeMode = NormalizerMode.advanced;
-        break;
-    }
+    ScriptNormalizationEngine.setModeFromString(_normalizerMode);
     notifyListeners();
     try {
       final settings = await database.getSettings();
@@ -157,18 +146,7 @@ class TransceiverController extends ChangeNotifier {
     _isMtEnabled = initialSettings.isMtEnabled;
     _ttsEngineType = initialSettings.ttsEngineType;
     _normalizerMode = initialSettings.normalizerMode;
-    switch (_normalizerMode) {
-      case 'LEGACY_RULE_BASED':
-        ScriptNormalizationEngine.activeMode = NormalizerMode.legacyRuleBased;
-        break;
-      case 'NEURAL_INDIC_XLIT':
-        ScriptNormalizationEngine.activeMode = NormalizerMode.neuralIndicXlit;
-        break;
-      case 'ADVANCED':
-      default:
-        ScriptNormalizationEngine.activeMode = NormalizerMode.advanced;
-        break;
-    }
+    ScriptNormalizationEngine.setModeFromString(_normalizerMode);
 
     _messages = await database.getAllMessages();
     notifyListeners();
@@ -189,23 +167,14 @@ class TransceiverController extends ChangeNotifier {
       }
       if (_normalizerMode != settings.normalizerMode) {
         _normalizerMode = settings.normalizerMode;
-        switch (_normalizerMode) {
-          case 'LEGACY_RULE_BASED':
-            ScriptNormalizationEngine.activeMode = NormalizerMode.legacyRuleBased;
-            break;
-          case 'NEURAL_INDIC_XLIT':
-            ScriptNormalizationEngine.activeMode = NormalizerMode.neuralIndicXlit;
-            break;
-          case 'ADVANCED':
-          default:
-            ScriptNormalizationEngine.activeMode = NormalizerMode.advanced;
-            break;
-        }
+        ScriptNormalizationEngine.setModeFromString(_normalizerMode);
         changed = true;
       }
       if (changed) {
         notifyListeners();
       }
+    }, onError: (e) {
+      debugPrint('[TransceiverController] Error in settingsStream: $e');
     });
 
     try {
@@ -240,20 +209,28 @@ class TransceiverController extends ChangeNotifier {
     _alertSubscription = alertReceiver.activeAlert.listen((alert) {
       _activeAlert = alert;
       notifyListeners();
+    }, onError: (e) {
+      debugPrint('[TransceiverController] Error in activeAlert stream: $e');
     });
 
     _statusSubscription = transceiverManager.connectionState.listen((status) {
       _connectionStatus = status;
       notifyListeners();
+    }, onError: (e) {
+      debugPrint('[TransceiverController] Error in connectionState stream: $e');
     });
 
     _dbSubscription = database.messagesStream.listen((list) {
       _messages = list;
       notifyListeners();
+    }, onError: (e) {
+      debugPrint('[TransceiverController] Error in messagesStream: $e');
     });
 
     _statsSubscription = transceiverManager.statsStream.listen((_) {
       notifyListeners();
+    }, onError: (e) {
+      debugPrint('[TransceiverController] Error in statsStream: $e');
     });
   }
 
@@ -281,14 +258,17 @@ class TransceiverController extends ChangeNotifier {
     );
   }
 
-  void setLanguage(String code) {
-    _selectedLanguage = code;
-    notifyListeners();
-    database.getSettings().then((s) {
-      database.saveSettings(s.copyWith(preferredLanguage: code));
-    }).catchError((e) {
-      debugPrint('[TransceiverController] Error saving language setting: $e');
-    });
+  Future<void> setLanguage(String code) async {
+    if (_selectedLanguage != code) {
+      _selectedLanguage = code;
+      notifyListeners();
+      try {
+        final s = await database.getSettings();
+        await database.saveSettings(s.copyWith(preferredLanguage: code));
+      } catch (e) {
+        debugPrint('[TransceiverController] Error saving language setting: $e');
+      }
+    }
   }
 
   Future<void> setMtEnabled(bool enabled) async {

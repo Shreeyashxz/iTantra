@@ -82,6 +82,21 @@ class ScriptNormalizationEngine {
   /// Active normalizer mode (defaults to Advanced Phonological Matrix, togglable to Legacy Rule-Based).
   static NormalizerMode activeMode = NormalizerMode.advanced;
 
+  static void setModeFromString(String mode) {
+    switch (mode) {
+      case 'LEGACY_RULE_BASED':
+        activeMode = NormalizerMode.legacyRuleBased;
+        break;
+      case 'NEURAL_INDIC_XLIT':
+        activeMode = NormalizerMode.neuralIndicXlit;
+        break;
+      case 'ADVANCED':
+      default:
+        activeMode = NormalizerMode.advanced;
+        break;
+    }
+  }
+
   // --- Tactical & Emergency Lexicon ---
   static const Map<String, String> _devanagariToEnglishLexicon = {
     'हैलो': 'Hello',

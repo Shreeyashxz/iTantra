@@ -274,8 +274,11 @@ class BleFallbackTransport {
     }
 
     // Fallback simulation mode
-    simulatePeerConnected(name ?? 'Simulated Node', address);
-    return true;
+    if (kDebugMode) {
+      simulatePeerConnected(name ?? 'Simulated Node', address);
+      return true;
+    }
+    return false;
   }
 
   /// Disconnects the active BLE GATT link.

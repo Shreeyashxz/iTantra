@@ -91,18 +91,7 @@ class SettingsController extends ChangeNotifier {
   }
 
   void _applySettings(UserSettingsEntity s) {
-    switch (s.normalizerMode) {
-      case 'LEGACY_RULE_BASED':
-        ScriptNormalizationEngine.activeMode = NormalizerMode.legacyRuleBased;
-        break;
-      case 'NEURAL_INDIC_XLIT':
-        ScriptNormalizationEngine.activeMode = NormalizerMode.neuralIndicXlit;
-        break;
-      case 'ADVANCED':
-      default:
-        ScriptNormalizationEngine.activeMode = NormalizerMode.advanced;
-        break;
-    }
+    ScriptNormalizationEngine.setModeFromString(s.normalizerMode);
   }
 
   Future<void> checkModelStatus() async {

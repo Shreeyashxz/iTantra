@@ -19,7 +19,7 @@ void main() {
   group('STT to TTS End-to-End Pipeline & Transliterator Tests', () {
     test('IndicScriptTransliterator maps emergency keywords to English', () {
       final input = 'हैलो आपातकालीन मदद';
-      final output = IndicScriptTransliterator.toEnglish(input);
+      final output = ScriptNormalizationEngine.normalizeFromStt(input, 'en');
       expect(output, contains('Hello'));
       expect(output, contains('Emergency'));
       expect(output, contains('Help'));
@@ -27,7 +27,7 @@ void main() {
 
     test('IndicScriptTransliterator transliterates numbers and technical terms', () {
       final input = 'रेडियो एक दो तीन';
-      final output = IndicScriptTransliterator.toEnglish(input);
+      final output = ScriptNormalizationEngine.normalizeFromStt(input, 'en');
       expect(output, contains('Radio'));
       expect(output, contains('1'));
       expect(output, contains('2'));
@@ -36,13 +36,13 @@ void main() {
 
     test('IndicScriptTransliterator leaves plain English intact', () {
       final input = 'Emergency Sector 4 coordinates confirmed';
-      final output = IndicScriptTransliterator.toEnglish(input);
+      final output = ScriptNormalizationEngine.normalizeFromStt(input, 'en');
       expect(output, equals('Emergency Sector 4 coordinates confirmed'));
     });
 
     test('IndicScriptTransliterator phonetic fallback for unmapped Devanagari', () {
       final input = 'पानी';
-      final output = IndicScriptTransliterator.toEnglish(input);
+      final output = ScriptNormalizationEngine.normalizeFromStt(input, 'en');
       // 'पानी' maps to 'Water' in dictionary
       expect(output, equals('Water'));
     });

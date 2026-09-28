@@ -27,10 +27,6 @@ class AppDatabase {
   }
 
   Future<Database> _initDB(String filePath) async {
-    if (!kIsWeb && (Platform.isWindows || Platform.isLinux)) {
-      sqfliteFfiInit();
-      databaseFactory = databaseFactoryFfi;
-    }
 
     final dbPath = await _getDatabaseDirectory();
     final path = join(dbPath, filePath);

@@ -57,3 +57,17 @@ xlit-src/**/*.pt
 !CMakeLists.txt
 converted_models/
 xlit-src/
+
+
+# JVM crash dumps
+hs_err_pid*.log
+replay_pid*.log
+
+# Stale output
+err.txt
+out.txt
+run_output.txt
+app_debug_output.txt
+
+# Model artifacts (downloaded at runtime)
+converted_models/

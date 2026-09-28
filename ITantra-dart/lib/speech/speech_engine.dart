@@ -2,7 +2,7 @@ import 'dart:async';
 
 abstract class SpeechEngine {
   Stream<String> startListening([String languageCode = 'hi']);
-  void stopListening();
+  Future<void> stopListening();
   Future<String> stopListeningAndTranscribe([String? languageCode]);
 
   Future<void> synthesizeSpeech(
@@ -11,7 +11,7 @@ abstract class SpeechEngine {
     String gender = 'FEMALE',
     String ttsEngineType = 'META_MMS',
   ]);
-  void stopSpeech();
+  Future<void> stopSpeech();
 
   bool get isSttLoaded;
   void unloadStt();
@@ -23,5 +23,5 @@ abstract class SpeechEngine {
   bool isTtsKeyLoaded(String key);
   void unloadTtsKey(String key);
 
-  void release();
+  Future<void> release();
 }

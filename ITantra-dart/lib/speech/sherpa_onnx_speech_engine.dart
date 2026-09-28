@@ -13,11 +13,7 @@ import 'os_native_tts_service.dart';
 import 'script_normalization_engine.dart';
 import 'speech_engine.dart';
 
-/// Legacy adapter for backward compatibility. Uses ScriptNormalizationEngine under the hood.
-class IndicScriptTransliterator {
-  static String toEnglish(String input) =>
-      ScriptNormalizationEngine.normalizeFromStt(input, 'en');
-}
+
 
 /// Real on-device and hybrid speech engine.
 /// Provides:
@@ -187,8 +183,8 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
   }
 
   @override
-  void stopListening() {
-    stopListeningAndTranscribe();
+  Future<void> stopListening() async {
+    await stopListeningAndTranscribe();
   }
 
   // ==========================================
@@ -204,24 +200,8 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
     }
 
     // Guard: AI4Bharat Rasa-13 does not support Gujarati ('gu'), Odia ('or'), or English ('en')
-    const unsupportedRasaLangs = {'gu', 'or', 'en'};
-    var effectiveEngineType = ttsEngineType;
-    if (effectiveEngineType == 'AI4BHARAT_RASA' &&
-        unsupportedRasaLangs.contains(languageCode.toLowerCase())) {
-      final langName = LanguagePackManager.supportedLanguages
-          .firstWhere((l) => l.code == languageCode.toLowerCase(),
-              orElse: () => LanguageMetadata(
-                  code: languageCode,
-                  iso3: '',
-                  englishName: languageCode,
-                  nativeName: ''))
-          .englishName;
-      debugPrint(
-        '⚠️ [TTS WARNING] AI4Bharat Rasa-13 does NOT support $langName ($languageCode). '
-        'Bypassing Rasa-13 to prevent silence or pronunciation distortion. Automatically falling back to Meta MMS-TTS.',
-      );
-      effectiveEngineType = 'META_MMS';
-    } else if (languageCode == 'en' &&
+    var effectiveEngineType = _getEffectiveTtsEngine(ttsEngineType, languageCode);
+    if (languageCode == 'en' &&
         effectiveEngineType != 'AI4BHARAT_RASA' &&
         effectiveEngineType != 'OS_NATIVE') {
       effectiveEngineType = 'META_MMS';
@@ -347,24 +327,8 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
     if (text.trim().isEmpty) return;
 
     // Guard: AI4Bharat Rasa-13 does not support Gujarati ('gu'), Odia ('or'), or English ('en')
-    const unsupportedRasaLangs = {'gu', 'or', 'en'};
-    var effectiveEngine = ttsEngineType;
-    if (effectiveEngine == 'AI4BHARAT_RASA' &&
-        unsupportedRasaLangs.contains(languageCode.toLowerCase())) {
-      final langName = LanguagePackManager.supportedLanguages
-          .firstWhere((l) => l.code == languageCode.toLowerCase(),
-              orElse: () => LanguageMetadata(
-                  code: languageCode,
-                  iso3: '',
-                  englishName: languageCode,
-                  nativeName: ''))
-          .englishName;
-      debugPrint(
-        '⚠️ [TTS WARNING] AI4Bharat Rasa-13 does NOT support $langName ($languageCode). '
-        'Bypassing Rasa-13 and using Meta MMS-TTS fallback to guarantee clear speech output.',
-      );
-      effectiveEngine = 'META_MMS';
-    } else if (languageCode == 'en' &&
+    var effectiveEngine = _getEffectiveTtsEngine(ttsEngineType, languageCode);
+    if (languageCode == 'en' &&
         effectiveEngine != 'AI4BHARAT_RASA' &&
         effectiveEngine != 'OS_NATIVE') {
       effectiveEngine = 'META_MMS';
@@ -567,8 +531,8 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
 
 
   @override
-  void stopSpeech() {
-    _audioPlayer.stop();
+  Future<void> stopSpeech() async {
+    await _audioPlayer.stop();
   }
 
   @override
@@ -627,12 +591,33 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
     debugPrint('[TTS] Neural VITS models successfully offloaded from RAM');
   }
 
+  String _getEffectiveTtsEngine(String engineType, String languageCode) {
+    if (engineType != 'AI4BHARAT_RASA') return engineType;
+    const unsupportedRasaLangs = {'gu', 'or', 'en'};
+    if (unsupportedRasaLangs.contains(languageCode.toLowerCase())) {
+      final langName = LanguagePackManager.supportedLanguages
+          .firstWhere((l) => l.code == languageCode.toLowerCase(),
+              orElse: () => LanguageMetadata(
+                  code: languageCode,
+                  iso3: '',
+                  englishName: languageCode,
+                  nativeName: ''))
+          .englishName;
+      debugPrint(
+        '⚠️ [TTS WARNING] AI4Bharat Rasa-13 does NOT support $langName ($languageCode). '
+        'Bypassing Rasa-13 to prevent silence or pronunciation distortion. Automatically falling back to Meta MMS-TTS.',
+      );
+      return 'META_MMS';
+    }
+    return engineType;
+  }
+
   @override
-  void release() {
-    stopListening();
-    stopSpeech();
+  Future<void> release() async {
+    await stopListening();
+    await stopSpeech();
     unloadStt();
     unloadTts();
-    _audioPlayer.dispose();
+    await _audioPlayer.dispose();
   }
 }

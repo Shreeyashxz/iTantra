@@ -10,6 +10,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'alerts/alert_broadcaster.dart';
 import 'speech/indic_trans_engine.dart';
+import 'speech/neural_mt_engine.dart';
 import 'alerts/alert_receiver.dart';
 import 'controllers/history_controller.dart';
 import 'controllers/peer_controller.dart';
@@ -114,6 +115,19 @@ void main() async {
     vadEngine: vadEngine,
     speechEngine: speechEngine,
     transceiverManager: transceiverManager,
+  );
+
+  AppLifecycleListener(
+    onStateChange: (state) {
+      if (state == AppLifecycleState.detached) {
+        AppDatabase.instance.close();
+        NeuralMtEngine.instance.unload();
+        speechEngine.release();
+        transceiverManager.dispose();
+        meshManager.dispose();
+        commPipeline.dispose();
+      }
+    },
   );
 
   runApp(

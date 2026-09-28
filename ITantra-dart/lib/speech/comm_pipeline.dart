@@ -155,10 +155,7 @@ class CommPipeline {
     return normalizedTranscript;
   }
 
-  /// Legacy stopTransmission() — delegates to stopTransmissionAndGetTranscript()
-  Future<void> stopTransmission() async {
-    await stopTransmissionAndGetTranscript();
-  }
+
 
   /// Starts Hands-Free VAD Auto-Mode:
   /// Continuously monitors microphone with Silero VAD; automatically records upon speech
@@ -247,10 +244,10 @@ class CommPipeline {
     speechEngine.stopListening();
   }
 
-  void dispose() {
-    stopTransmission();
-    stopVadAutoMode();
-    _sttSubscription?.cancel();
+  Future<void> dispose() async {
+    await stopTransmissionAndGetTranscript();
+    await stopVadAutoMode();
+    await _sttSubscription?.cancel();
     _sttSubscription = null;
     _onTranscriptCallback = null;
     _onVoiceDetectedCallback = null;
