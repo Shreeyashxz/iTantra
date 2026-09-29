@@ -211,6 +211,11 @@ class WifiMeshManager {
   /// Starts the multi-interface UDP broadcast & Multicast presence beacon
   Future<void> startBeaconService({String? customNodeName}) async {
     if (customNodeName != null) nodeName = customNodeName;
+    // Idempotent: TransceiverController + PeerController both call this on
+    // startup. Don't restart timers/sockets if already beaconing.
+    if (_isBeaconing && _broadcastSocket != null && _beaconTimer?.isActive == true) {
+      return;
+    }
     await refreshInterfaces();
     await _startReceivers();
 
@@ -325,14 +330,23 @@ class WifiMeshManager {
     try {
       final msg = utf8.decode(dg.data);
       if (!msg.startsWith(beaconPrefix)) return;
+      // Beacon bodies over UDP must stay small; drop jumbo datagrams.
+      if (dg.data.length > 512) return;
 
       final body = msg.substring(beaconPrefix.length);
+      // Format: id:name:ip:port — name may itself contain ':' so parse
+      // from the ends: last 2 segments are ip+port, first is id, middle is name.
       final parts = body.split(':');
       if (parts.length >= 4) {
-        final peerId = parts[0];
-        final peerName = parts[1];
-        final announcedIp = parts[2];
-        final port = int.tryParse(parts[3]) ?? transceiverManager.activePort;
+        final peerId = parts.first.trim();
+        final portStr = parts.last.trim();
+        final announcedIp = parts[parts.length - 2].trim();
+        final peerName = parts.sublist(1, parts.length - 2).join(':').trim();
+        if (peerId.isEmpty || peerId.length > 64) return;
+        if (peerName.length > 64) return;
+        final port = int.tryParse(portStr) ?? transceiverManager.activePort;
+        if (port < 1 || port > 65535) return;
+        if (!_isValidIpv4(announcedIp) && announcedIp.isNotEmpty) return;
 
         // Resolve real IP: if announced IP is missing, loopback, APIPA, or off-subnet, use the datagram link address
         String peerIp = dg.address.address;
@@ -404,6 +418,16 @@ class WifiMeshManager {
       }
     } catch (_) {}
     return 0;
+  }
+
+  static bool _isValidIpv4(String ip) {
+    final parts = ip.split('.');
+    if (parts.length != 4) return false;
+    for (final p in parts) {
+      final n = int.tryParse(p);
+      if (n == null || n < 0 || n > 255) return false;
+    }
+    return true;
   }
 
   void _autoConnectToPeer(String peerIp, int port) {
@@ -513,10 +537,10 @@ class WifiMeshManager {
             _discoveredPeers[targetIp] = peer;
             found.add(peer);
 
-            // Immediately auto-connect
-            if (autoConnect) {
-              transceiverManager.connectToPeer(targetIp, targetPort: activePort);
-            }
+            // Discovery-only: do NOT auto-connect to raw probed sockets.
+            // A listening TCP port may be a printer or unrelated service.
+            // Real iTantra peers announce via signed beacons and will be
+            // auto-connected in _processBeaconDatagram().
           } catch (_) {}
         }());
 

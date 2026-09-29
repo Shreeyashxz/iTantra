@@ -10,7 +10,16 @@ cd /d "%~dp0"
 echo [*] Project Directory: %CD%
 echo.
 
-REM 2. Determine build arguments
+REM 2. Kill running Windows app to prevent file lock issues
+echo [*] Checking for running iTantra windows app to prevent file lock issues...
+taskkill /F /IM itantra_dart.exe 2>nul
+if %errorlevel% equ 0 (
+    echo [*] Terminated running iTantra_dart.exe. Waiting 1 second...
+    timeout /t 1 /nobreak >nul
+)
+echo.
+
+REM 3. Determine build arguments
 set "BUILD_ARGS=--release"
 if not "%~1"=="" (
     set "BUILD_ARGS=%*"
@@ -18,7 +27,7 @@ if not "%~1"=="" (
 
 echo [*] Building Android APK (flutter build apk %BUILD_ARGS%)...
 echo ========================================================
-cmd.exe /c "flutter build apk %BUILD_ARGS%"
+call flutter build apk %BUILD_ARGS%
 if %errorlevel% neq 0 (
     echo.
     echo [ERROR] Flutter build apk failed with exit code %errorlevel%.

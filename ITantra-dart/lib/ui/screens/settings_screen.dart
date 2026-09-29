@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../controllers/settings_controller.dart';
 import '../../controllers/transceiver_controller.dart';
 import '../../speech/language_pack_manager.dart';
+import '../widgets/pipeline_diagram.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -36,6 +37,9 @@ class SettingsScreen extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // Live pipeline control center (force on/off + warnings + RAM pie)
+            const PipelineDiagramCard(),
+            const SizedBox(height: 16),
             // On-Demand Models Section
             Row(
               children: [
@@ -57,7 +61,13 @@ class SettingsScreen extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'On-device models are cached in private storage (<45MB base application footprint constraint).',
+                      'On-device model files cached in private storage (<45MB base application footprint constraint).',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    Text(
+                      '“Installed” = file on disk. Whether it is loaded in RAM is controlled in the Voice Pipeline card above.',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
@@ -192,8 +202,12 @@ class SettingsScreen extends StatelessWidget {
                     const SizedBox(height: 6),
 
                     // AI4Bharat IndicXlit Neural Transliteration
+                    // NOTE: the ONNX bundle is not published upstream yet — the
+                    // toggle works offline via rule-based fallback; download needs
+                    // scripts/export_indicxlit_onnx.py + hosting (see code comment).
                     _ModelStatusRow(
                       title: 'Neural Transliteration (AI4Bharat IndicXlit / Aksharantar, ~35 MB)',
+                      subtitle: 'Optional — toggle works offline without this (fallback active)',
                       modelKey: 'indicxlit',
                       isReady: settingsController.isIndicXlitReady,
                       downloadState: settingsController.downloadState,
@@ -202,9 +216,9 @@ class SettingsScreen extends StatelessWidget {
                     ),
                     const SizedBox(height: 6),
 
-                    // AI4Bharat IndicLID-FastText Language Identification
+                    // AI4Bharat IndicLID-FastText Language Identification (261MB — Wi-Fi recommended)
                     _ModelStatusRow(
-                      title: 'Language Identification (AI4Bharat IndicLID-FastText, ~14 MB)',
+                      title: 'Language Identification (AI4Bharat IndicLID-FastText, 261 MB)',
                       modelKey: 'lid',
                       isReady: settingsController.isLidReady,
                       downloadState: settingsController.downloadState,
@@ -242,15 +256,21 @@ class SettingsScreen extends StatelessWidget {
                     ),
                     const SizedBox(height: 8),
 
-                    // 10 Language TTS Rows — each with inline progress bar
+                    // 10 Language TTS Rows — each with inline progress bar.
+                    // NOTE: Rasa-13 is one universal 13-language voice. When it is
+                    // installed, every language row correctly shows Installed
+                    // (covered by Rasa-13, no per-language file needed).
                     ...settingsController.languages.map((lang) {
                       final isReady = settings.ttsEngineType == 'META_MMS'
                           ? settingsController.isMmsReady(lang.code)
                           : settingsController.isTtsReady(lang.code);
+                      final coveredByRasa = settings.ttsEngineType != 'META_MMS' &&
+                          settingsController.isRasa13Ready;
                       return Padding(
                         padding: const EdgeInsets.symmetric(vertical: 4),
                         child: _ModelStatusRow(
                           title: '${lang.nativeName} (${lang.englishName})',
+                          subtitle: coveredByRasa ? 'Covered by universal Rasa-13 voice' : null,
                           modelKey: 'tts_${lang.code}',
                           isReady: isReady,
                           downloadState: settingsController.downloadState,

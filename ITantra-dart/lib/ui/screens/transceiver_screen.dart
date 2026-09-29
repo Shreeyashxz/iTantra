@@ -653,8 +653,9 @@ class _TransceiverScreenState extends State<TransceiverScreen>
                 Padding(
                   padding: const EdgeInsets.only(top: 2, bottom: 6),
                   child: InkWell(
-                    onTap: () {
-                      controller.toggleNormalizerMode();
+                    onTap: () async {
+                      await controller.toggleNormalizerMode();
+                      if (!context.mounted) return;
                       final normColor = controller.isAdvancedNormalizer
                           ? const Color(0xFF00E5FF)
                           : (controller.isLegacyNormalizer ? Colors.amberAccent : const Color(0xFFD500F9));
@@ -665,7 +666,7 @@ class _TransceiverScreenState extends State<TransceiverScreen>
                           ? 'Normalizer: ADVANCED (Phonological Matrix / Instant)'
                           : (controller.isLegacyNormalizer
                               ? 'Normalizer: LEGACY (Rule-Based ISCII Offset)'
-                              : 'Normalizer: NEURAL INDIC_XLIT (AI4Bharat Aksharantar / Neural Mode)');
+                              : 'Normalizer: XLIT — ${controller.xlitStatusLabel}');
 
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(

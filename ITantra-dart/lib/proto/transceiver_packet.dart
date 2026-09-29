@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:uuid/uuid.dart';
 
 enum PacketType {
   voice(0),
@@ -39,11 +40,19 @@ enum PacketType {
 
 /// Strongly typed TransceiverPacket conforming to transceiver_packet.proto
 class TransceiverPacket {
+  static const int maxPacketBytes = 256 * 1024;
+  static const int maxTextChars = 2000;
+  static const int maxIdChars = 128;
+  static const String pingMagic = '__ITANTRA_PING__';
+
   final String senderId;
   final String languageCode;
   final String transcript;
   final int timestampMs;
   final PacketType type;
+  /// Unique per-packet id for dedup/ordering across Wi-Fi + BLE dual delivery.
+  /// Missing (old peers) falls back to senderId|timestampMs.
+  final String packetId;
 
   TransceiverPacket({
     required this.senderId,
@@ -51,15 +60,25 @@ class TransceiverPacket {
     required this.transcript,
     int? timestampMs,
     this.type = PacketType.voice,
-  }) : timestampMs = timestampMs ?? DateTime.now().millisecondsSinceEpoch;
+    String? packetId,
+  })  : timestampMs = timestampMs ?? DateTime.now().millisecondsSinceEpoch,
+        packetId = (packetId != null && packetId.isNotEmpty)
+            ? packetId
+            : const Uuid().v4();
+
+  /// Dedup key stable across retransmits and dual transports.
+  String get dedupKey => packetId.isNotEmpty ? 'id:$packetId' : 'st:$senderId|$timestampMs';
 
   /// Serializes packet to standard Protobuf wire format (binary)
   Uint8List toProtoBytes() {
+    // Bound outgoing size — prevents accidental OOM on huge transcripts.
+    final safeSender = senderId.length > maxIdChars ? senderId.substring(0, maxIdChars) : senderId;
+    final safeTranscript = transcript.length > maxTextChars ? transcript.substring(0, maxTextChars) : transcript;
     final BytesBuilder builder = BytesBuilder();
 
     // Field 1: sender_id (string, tag = (1 << 3) | 2 = 10)
-    if (senderId.isNotEmpty) {
-      final bytes = utf8.encode(senderId);
+    if (safeSender.isNotEmpty) {
+      final bytes = utf8.encode(safeSender);
       _writeVarint(builder, (1 << 3) | 2);
       _writeVarint(builder, bytes.length);
       builder.add(bytes);
@@ -74,8 +93,8 @@ class TransceiverPacket {
     }
 
     // Field 3: transcript (string, tag = (3 << 3) | 2 = 26)
-    if (transcript.isNotEmpty) {
-      final bytes = utf8.encode(transcript);
+    if (safeTranscript.isNotEmpty) {
+      final bytes = utf8.encode(safeTranscript);
       _writeVarint(builder, (3 << 3) | 2);
       _writeVarint(builder, bytes.length);
       builder.add(bytes);
@@ -93,6 +112,14 @@ class TransceiverPacket {
       _writeVarint(builder, type.value);
     }
 
+    // Field 6: packet_id (string, tag = (6 << 3) | 2 = 50) — dedup across transports
+    if (packetId.isNotEmpty) {
+      final bytes = utf8.encode(packetId.length > maxIdChars ? packetId.substring(0, maxIdChars) : packetId);
+      _writeVarint(builder, (6 << 3) | 2);
+      _writeVarint(builder, bytes.length);
+      builder.add(bytes);
+    }
+
     return builder.toBytes();
   }
 
@@ -107,11 +134,15 @@ class TransceiverPacket {
 
   /// Parses a TransceiverPacket from raw Protobuf binary bytes
   static TransceiverPacket fromProtoBytes(Uint8List bytes) {
+    if (bytes.length > maxPacketBytes) {
+      throw FormatException('packet exceeds ${maxPacketBytes}B cap (${bytes.length}B)');
+    }
     String senderId = '';
     String languageCode = 'hi';
     String transcript = '';
     int timestampMs = 0;
     PacketType type = PacketType.voice;
+    String packetId = '';
 
     int offset = 0;
     while (offset < bytes.length) {
@@ -128,7 +159,11 @@ class TransceiverPacket {
             final lenRes = _readVarint(bytes, offset);
             final length = lenRes.value;
             offset = lenRes.newOffset;
-            senderId = utf8.decode(bytes.sublist(offset, offset + length));
+            if (length < 0 || length > maxPacketBytes || offset + length > bytes.length) {
+              throw FormatException('bad senderId length $length');
+            }
+            senderId = utf8.decode(bytes.sublist(offset, offset + length), allowMalformed: true);
+            if (senderId.length > maxIdChars) senderId = senderId.substring(0, maxIdChars);
             offset += length;
           }
           break;
@@ -137,7 +172,10 @@ class TransceiverPacket {
             final lenRes = _readVarint(bytes, offset);
             final length = lenRes.value;
             offset = lenRes.newOffset;
-            languageCode = utf8.decode(bytes.sublist(offset, offset + length));
+            if (length < 0 || length > 16 || offset + length > bytes.length) {
+              throw FormatException('bad lang length $length');
+            }
+            languageCode = utf8.decode(bytes.sublist(offset, offset + length), allowMalformed: true);
             offset += length;
           }
           break;
@@ -146,7 +184,11 @@ class TransceiverPacket {
             final lenRes = _readVarint(bytes, offset);
             final length = lenRes.value;
             offset = lenRes.newOffset;
-            transcript = utf8.decode(bytes.sublist(offset, offset + length));
+            if (length < 0 || length > maxPacketBytes || offset + length > bytes.length) {
+              throw FormatException('bad transcript length $length');
+            }
+            transcript = utf8.decode(bytes.sublist(offset, offset + length), allowMalformed: true);
+            if (transcript.length > maxTextChars) transcript = transcript.substring(0, maxTextChars);
             offset += length;
           }
           break;
@@ -164,18 +206,37 @@ class TransceiverPacket {
             offset = valRes.newOffset;
           }
           break;
+        case 6: // packet_id
+          if (wireType == 2) {
+            final lenRes = _readVarint(bytes, offset);
+            final length = lenRes.value;
+            offset = lenRes.newOffset;
+            if (length < 0 || length > maxIdChars + 16 || offset + length > bytes.length) {
+              throw FormatException('bad packetId length $length');
+            }
+            packetId = utf8.decode(bytes.sublist(offset, offset + length), allowMalformed: true);
+            offset += length;
+          }
+          break;
         default:
-          // Skip unknown field according to wire type
+          // Skip unknown field according to wire type (with bounds checks)
           if (wireType == 0) {
             final skipRes = _readVarint(bytes, offset);
             offset = skipRes.newOffset;
           } else if (wireType == 2) {
             final lenRes = _readVarint(bytes, offset);
+            if (lenRes.value < 0 || lenRes.value > maxPacketBytes || lenRes.newOffset + lenRes.value > bytes.length) {
+              throw FormatException('bad skip length ${lenRes.value}');
+            }
             offset = lenRes.newOffset + lenRes.value;
           } else if (wireType == 1) {
+            if (offset + 8 > bytes.length) throw const FormatException('truncated fixed64');
             offset += 8;
           } else if (wireType == 5) {
+            if (offset + 4 > bytes.length) throw const FormatException('truncated fixed32');
             offset += 4;
+          } else {
+            throw FormatException('unsupported wire type $wireType');
           }
           break;
       }
@@ -187,10 +248,13 @@ class TransceiverPacket {
       transcript: transcript,
       timestampMs: timestampMs == 0 ? DateTime.now().millisecondsSinceEpoch : timestampMs,
       type: type,
+      packetId: packetId.isEmpty ? null : packetId,
     );
   }
 
-  /// Parses a length-delimited protobuf chunk from a buffer
+  /// Parses a length-delimited protobuf chunk from a buffer.
+  /// Returns bytesConsumed=-1 on corrupt framing so callers can drop the buffer
+  /// instead of wedging forever on unconsumed bytes.
   static ({TransceiverPacket? packet, int bytesConsumed}) parseDelimited(Uint8List buffer) {
     if (buffer.isEmpty) return (packet: null, bytesConsumed: 0);
 
@@ -198,6 +262,10 @@ class TransceiverPacket {
       final lenRes = _readVarint(buffer, 0);
       final payloadLen = lenRes.value;
       final headerLen = lenRes.newOffset;
+
+      if (payloadLen < 0 || payloadLen > maxPacketBytes) {
+        return (packet: null, bytesConsumed: -1); // corrupt length — drop buffer
+      }
 
       if (buffer.length < headerLen + payloadLen) {
         return (packet: null, bytesConsumed: 0); // Need more data
@@ -207,7 +275,7 @@ class TransceiverPacket {
       final packet = fromProtoBytes(payload);
       return (packet: packet, bytesConsumed: headerLen + payloadLen);
     } catch (_) {
-      return (packet: null, bytesConsumed: 0);
+      return (packet: null, bytesConsumed: -1);
     }
   }
 
@@ -224,15 +292,18 @@ class TransceiverPacket {
     int result = 0;
     int shift = 0;
     int cur = offset;
+    int count = 0;
     while (cur < bytes.length) {
+      if (count++ >= 10) throw const FormatException('varint too long');
       final byte = bytes[cur++];
+      if (shift >= 64) throw const FormatException('varint overflow');
       result |= (byte & 0x7F) << shift;
       if ((byte & 0x80) == 0) {
         return (value: result, newOffset: cur);
       }
       shift += 7;
     }
-    return (value: result, newOffset: cur);
+    throw const FormatException('truncated varint');
   }
 
   Map<String, dynamic> toJson() => {
@@ -241,6 +312,7 @@ class TransceiverPacket {
     'transcript': transcript,
     'timestampMs': timestampMs,
     'type': type.name.toUpperCase(),
+    'packetId': packetId,
   };
 
   factory TransceiverPacket.fromJson(Map<String, dynamic> json) => TransceiverPacket(
@@ -249,9 +321,10 @@ class TransceiverPacket {
     transcript: json['transcript'] as String? ?? '',
     timestampMs: json['timestampMs'] as int?,
     type: PacketType.fromString(json['type'] as String? ?? 'VOICE'),
+    packetId: json['packetId'] as String?,
   );
 
   @override
   String toString() =>
-      'TransceiverPacket(senderId: $senderId, lang: $languageCode, text: "$transcript", type: $type, time: $timestampMs)';
+      'TransceiverPacket(senderId: $senderId, lang: $languageCode, text: "$transcript", type: $type, time: $timestampMs, id: $packetId)';
 }

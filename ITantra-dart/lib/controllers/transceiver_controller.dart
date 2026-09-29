@@ -1,6 +1,6 @@
 import 'dart:async';
-import 'dart:math';
 import 'package:flutter/foundation.dart';
+import 'package:uuid/uuid.dart';
 import '../alerts/alert_broadcaster.dart';
 import '../alerts/alert_receiver.dart';
 import '../data/app_database.dart';
@@ -11,6 +11,8 @@ import '../network/wifi_mesh_manager.dart';
 
 import '../speech/comm_pipeline.dart';
 import '../speech/indic_trans_engine.dart';
+import '../speech/indic_xlit_engine.dart';
+import '../speech/neural_xlit_engine.dart';
 import '../speech/script_normalization_engine.dart';
 import '../speech/sherpa_onnx_speech_engine.dart';
 import 'ptt_manager.dart';
@@ -87,6 +89,29 @@ class TransceiverController extends ChangeNotifier {
   bool get isAdvancedNormalizer => _normalizerMode == 'ADVANCED';
   bool get isLegacyNormalizer => _normalizerMode == 'LEGACY_RULE_BASED';
   bool get isNeuralIndicXlit => _normalizerMode == 'NEURAL_INDIC_XLIT';
+  String get xlitStatusLabel => IndicXlitEngine.instance.statusLabel;
+  bool get isXlitNeural => IndicXlitEngine.instance.isNeuralActive;
+
+  /// Direct set (used by pipeline diagram force switches).
+  Future<void> setNormalizerMode(String mode) async {
+    final leavingNeural = _normalizerMode == 'NEURAL_INDIC_XLIT' && mode != 'NEURAL_INDIC_XLIT';
+    _normalizerMode = mode;
+    ScriptNormalizationEngine.setModeFromString(_normalizerMode);
+    if (mode == 'NEURAL_INDIC_XLIT') {
+      final neural = await IndicXlitEngine.instance.ensureReady();
+      debugPrint('[TransceiverController] Xlit ready (neural=$neural): ${IndicXlitEngine.instance.statusLabel}');
+    } else if (leavingNeural) {
+      // Second ORT session is ~120MB — never hold it while another mode is active.
+      await NeuralXlitEngine.instance.unload();
+    }
+    notifyListeners();
+    try {
+      final settings = await database.getSettings();
+      await database.saveSettings(settings.copyWith(normalizerMode: _normalizerMode));
+    } catch (e) {
+      debugPrint('[TransceiverController] Error saving normalizer mode: $e');
+    }
+  }
 
   Future<void> toggleNormalizerMode() async {
     String next;
@@ -99,6 +124,12 @@ class TransceiverController extends ChangeNotifier {
     }
     _normalizerMode = next;
     ScriptNormalizationEngine.setModeFromString(_normalizerMode);
+    // Toggle-on: initialize Xlit so it works immediately (neural if bundle
+    // present, otherwise offline rule-based fallback — no download required).
+    if (next == 'NEURAL_INDIC_XLIT') {
+      final neural = await IndicXlitEngine.instance.ensureReady();
+      debugPrint('[TransceiverController] Xlit ready (neural=$neural): ${IndicXlitEngine.instance.statusLabel}');
+    }
     notifyListeners();
     try {
       final settings = await database.getSettings();
@@ -124,19 +155,25 @@ class TransceiverController extends ChangeNotifier {
     required this.speechEngine,
     required this.database,
   }) {
-    deviceId = 'DEV_${Random().nextInt(90000) + 10000}'; // Fallback until async init completes
+    deviceId = 'DEV_${const Uuid().v4().substring(0, 8).toUpperCase()}'; // Fallback until async init completes
     _connectionStatus = transceiverManager.currentStatusString;
     _pttManager = PttManager(commPipeline: commPipeline, speechEngine: speechEngine, database: database);
-    _pttManager.addListener(notifyListeners);
+    _pttManager.addListener(_onPttChanged);
     _incomingPacketHandler = IncomingPacketHandler(transceiverManager: transceiverManager, database: database, speechEngine: speechEngine, transEngine: transEngine);
     _init();
   }
+
+  void _onPttChanged() {
+    if (!_disposed) notifyListeners();
+  }
+
+  bool _disposed = false;
 
   Future<void> _init() async {
     // Load settings including MT preference and TTS engine type
     final initialSettings = await database.getSettings();
     if (initialSettings.deviceId.isEmpty) {
-      deviceId = 'DEV_${Random().nextInt(90000) + 10000}';
+      deviceId = 'DEV_${const Uuid().v4().substring(0, 8).toUpperCase()}';
       await database.saveSettings(initialSettings.copyWith(deviceId: deviceId));
     } else {
       deviceId = initialSettings.deviceId;
@@ -147,6 +184,10 @@ class TransceiverController extends ChangeNotifier {
     _ttsEngineType = initialSettings.ttsEngineType;
     _normalizerMode = initialSettings.normalizerMode;
     ScriptNormalizationEngine.setModeFromString(_normalizerMode);
+    if (_normalizerMode == 'NEURAL_INDIC_XLIT') {
+      // Persisted toggle (restart): Xlit must work without re-toggling.
+      IndicXlitEngine.instance.ensureReady();
+    }
 
     _messages = await database.getAllMessages();
     notifyListeners();
@@ -168,6 +209,9 @@ class TransceiverController extends ChangeNotifier {
       if (_normalizerMode != settings.normalizerMode) {
         _normalizerMode = settings.normalizerMode;
         ScriptNormalizationEngine.setModeFromString(_normalizerMode);
+        if (_normalizerMode == 'NEURAL_INDIC_XLIT') {
+          IndicXlitEngine.instance.ensureReady();
+        }
         changed = true;
       }
       if (changed) {
@@ -238,7 +282,10 @@ class TransceiverController extends ChangeNotifier {
   Future<void> onPttPressed() => _pttManager.onPttPressed(deviceId: deviceId, selectedLanguage: _selectedLanguage);
   Future<void> onPttReleased() => _pttManager.onPttReleased(deviceId: deviceId, selectedLanguage: _selectedLanguage);
   void clearPttError() => _pttManager.clearPttError();
-  void toggleVadMode() => _pttManager.toggleVadMode(deviceId: deviceId, selectedLanguage: _selectedLanguage);
+  void toggleVadMode() {
+    // Fire-and-forget is intentional for UI tap; errors surface via pttError.
+    _pttManager.toggleVadMode(deviceId: deviceId, selectedLanguage: _selectedLanguage);
+  }
 
   Future<void> sendUtterance(String text) async {
     if (text.trim().isEmpty) return;
@@ -316,7 +363,7 @@ class TransceiverController extends ChangeNotifier {
   void dismissAlert() {
     _activeAlert = null;
     alertReceiver.dismissAlert();
-    notifyListeners();
+    if (!_disposed) notifyListeners();
   }
 
   void startPeerDiscovery() {
@@ -325,9 +372,19 @@ class TransceiverController extends ChangeNotifier {
 
   @override
   void dispose() {
-    _incomingPacketHandler.dispose();
-    _pttManager.removeListener(notifyListeners);
-    _pttManager.dispose();
+    _disposed = true;
+    try {
+      _pttManager.removeListener(_onPttChanged);
+    } catch (_) {}
+    try {
+      _pttManager.removeListener(notifyListeners);
+    } catch (_) {}
+    try {
+      _incomingPacketHandler.dispose();
+    } catch (_) {}
+    try {
+      _pttManager.dispose();
+    } catch (_) {}
     _alertSubscription?.cancel();
     _statusSubscription?.cancel();
     _dbSubscription?.cancel();

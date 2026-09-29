@@ -36,6 +36,29 @@ class IndicXlitEngine {
     return ok;
   }
 
+  /// Toggle-on helper: tries neural, but ALWAYS succeeds via offline fallback.
+  /// Returns true when neural ONNX is live, false when rule-based fallback is
+  /// active (still fully functional, 0MB, <1ms — no download required).
+  Future<bool> ensureReady() async {
+    try {
+      final ok = await NeuralXlitEngine.instance.init();
+      await checkModelExists();
+      return ok;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Human-readable status for UI badges (never claims neural when fallback).
+  /// Neural is reported only after sessions pass the post-load smoke test.
+  String get statusLabel => isNeuralActive
+      ? (NeuralXlitEngine.instance.smokeOk
+          ? 'Neural ONNX active (verified)'
+          : 'Neural sessions live (unverified)')
+      : 'Rule-based fallback active (offline)';
+
+  bool get isFallbackActive => !isNeuralActive;
+
   void unload() {
     NeuralXlitEngine.instance.unload();
   }

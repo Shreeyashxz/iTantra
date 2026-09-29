@@ -11,6 +11,7 @@ import 'entities/user_settings_entity.dart';
 class AppDatabase {
   static final AppDatabase instance = AppDatabase._init();
   static Database? _database;
+  static Future<Database>? _initFuture;
 
   final _messagesStreamController = StreamController<List<MessageEntity>>.broadcast();
   Stream<List<MessageEntity>> get messagesStream => _messagesStreamController.stream;
@@ -22,7 +23,13 @@ class AppDatabase {
 
   Future<Database> get database async {
     if (_database != null) return _database!;
-    _database = await _initDB('itantra_database.db');
+    // Serialize concurrent first-opens (avoids double openDatabase → SQLITE_BUSY).
+    _initFuture ??= _initDB('itantra_database.db');
+    try {
+      _database = await _initFuture!;
+    } finally {
+      _initFuture = null;
+    }
     return _database!;
   }
 
@@ -141,6 +148,46 @@ class AppDatabase {
   /// Self-healing schema validation: ensures all columns exist regardless of previous upgrade anomalies.
   Future<void> _ensureSchema(Database db) async {
     try {
+      // Old v1 DBs may lack peers/messages entirely — create if missing.
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS messages (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          senderId TEXT NOT NULL,
+          text TEXT NOT NULL,
+          languageCode TEXT NOT NULL DEFAULT 'hi',
+          type TEXT NOT NULL DEFAULT 'VOICE',
+          timestamp INTEGER NOT NULL,
+          isIncoming INTEGER NOT NULL DEFAULT 0
+        )
+      ''');
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS peers (
+          deviceId TEXT PRIMARY KEY,
+          displayName TEXT NOT NULL,
+          lastConnected INTEGER NOT NULL,
+          transportType TEXT NOT NULL DEFAULT 'WIFI_DIRECT',
+          isConnected INTEGER NOT NULL DEFAULT 0
+        )
+      ''');
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS user_settings (
+          id INTEGER PRIMARY KEY,
+          preferredLanguage TEXT NOT NULL DEFAULT 'hi',
+          ttsSpeed REAL NOT NULL DEFAULT 1.0,
+          ttsGender TEXT NOT NULL DEFAULT 'FEMALE',
+          ttsEngineType TEXT NOT NULL DEFAULT 'AI4BHARAT_RASA',
+          vadSensitivity REAL NOT NULL DEFAULT 0.6,
+          pttMode TEXT NOT NULL DEFAULT 'HOLD',
+          installedLanguagePacks TEXT NOT NULL DEFAULT 'hi,en',
+          alertVolumeMax INTEGER NOT NULL DEFAULT 1,
+          autoPlayAudio INTEGER NOT NULL DEFAULT 1,
+          isMtEnabled INTEGER NOT NULL DEFAULT 1,
+          sttPrecision TEXT NOT NULL DEFAULT 'INT8',
+          mtPrecision TEXT NOT NULL DEFAULT 'INT8',
+          normalizerMode TEXT NOT NULL DEFAULT 'ADVANCED',
+          deviceId TEXT NOT NULL DEFAULT ''
+        )
+      ''');
       final info = await db.rawQuery('PRAGMA table_info(user_settings)');
       final existingCols = info.map((c) => c['name'] as String).toSet();
 
@@ -194,18 +241,24 @@ class AppDatabase {
 
   Future<List<MessageEntity>> searchMessages(String query) async {
     final db = await database;
+    // Escape LIKE wildcards so '%/_' don't trigger full-table scans; cap results.
+    final escaped = query.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_');
     final maps = await db.query(
       'messages',
-      where: 'text LIKE ? OR senderId LIKE ?',
-      whereArgs: ['%$query%', '%$query%'],
+      where: 'text LIKE ? ESCAPE \'\\\' OR senderId LIKE ? ESCAPE \'\\\'',
+      whereArgs: ['%$escaped%', '%$escaped%'],
       orderBy: 'timestamp DESC',
+      limit: 200,
     );
     return maps.map((m) => MessageEntity.fromMap(m)).toList();
   }
 
   Future<void> _notifyMessagesChanged() async {
+    if (_messagesStreamController.isClosed) return;
     final messages = await getAllMessages();
-    _messagesStreamController.add(messages);
+    if (!_messagesStreamController.isClosed) {
+      _messagesStreamController.add(messages);
+    }
   }
 
   // --- Peer Device Operations ---
@@ -231,22 +284,40 @@ class AppDatabase {
       settings = UserSettingsEntity();
       await db.insert('user_settings', settings.toMap());
     }
-    _settingsStreamController.add(settings);
+    if (!_settingsStreamController.isClosed) {
+      _settingsStreamController.add(settings);
+    }
     return settings;
   }
 
   Future<void> saveSettings(UserSettingsEntity settings) async {
     final db = await database;
     await db.insert('user_settings', settings.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
-    _settingsStreamController.add(settings);
+    if (!_settingsStreamController.isClosed) {
+      _settingsStreamController.add(settings);
+    }
   }
 
   Future<void> close() async {
     final db = _database;
+    _database = null;
+    _initFuture = null;
     if (db != null) {
-      await db.close();
+      try {
+        await db.close();
+      } catch (_) {}
     }
-    _messagesStreamController.close();
-    _settingsStreamController.close();
+    // Controllers are broadcast and may be re-created after close (hot restart);
+    // only close if open.
+    if (!_messagesStreamController.isClosed) {
+      try {
+        await _messagesStreamController.close();
+      } catch (_) {}
+    }
+    if (!_settingsStreamController.isClosed) {
+      try {
+        await _settingsStreamController.close();
+      } catch (_) {}
+    }
   }
 }

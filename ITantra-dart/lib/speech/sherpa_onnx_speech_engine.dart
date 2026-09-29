@@ -28,6 +28,8 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
   sherpa.OfflineRecognizer? _offlineRecognizer;
   bool _isIndicConformer = false;
   String? _loadedSttVariant;
+  // Cap ~60s at 16kHz to prevent OOM on long PTT holds (960k int16).
+  static const int _maxAudioSamples = 16 * 1000 * 60;
   final List<int> _audioBuffer = [];
 
   StreamController<String>? _sttTextController;
@@ -37,6 +39,8 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
   // --- TTS ---
   final Map<String, sherpa.OfflineTts> _ttsEngines = {};
   final List<String> _ttsEngineKeys = [];
+  // Serialize concurrent speak requests so bursts queue instead of cutting.
+  Future<void> _ttsLock = Future.value();
 
   SherpaOnnxSpeechEngine({required this.languagePackManager});
 
@@ -61,6 +65,15 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
         final ortPath = p.join(exeDir, 'onnxruntime.dll');
         if (File(ortPath).existsSync()) {
           DynamicLibrary.open(ortPath);
+        } else {
+          // Fallback for `flutter run`
+          final runPath = p.join(Directory.current.path, 'build', 'windows', 'x64', 'runner', 'Debug', 'onnxruntime.dll');
+          final runPathRel = p.join(Directory.current.path, 'build', 'windows', 'x64', 'runner', 'Release', 'onnxruntime.dll');
+          if (File(runPath).existsSync()) {
+            DynamicLibrary.open(runPath);
+          } else if (File(runPathRel).existsSync()) {
+            DynamicLibrary.open(runPathRel);
+          }
         }
       } catch (_) {}
     }
@@ -120,7 +133,15 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
   @override
   Stream<String> startListening([String languageCode = 'hi']) {
     _currentLanguage = languageCode;
-    _sttTextController?.close();
+    final old = _sttTextController;
+    if (old != null && !old.isClosed) {
+      // Don't await in sync method; close in microtask to avoid "add after close".
+      Future.microtask(() async {
+        try {
+          await old.close();
+        } catch (_) {}
+      });
+    }
     _sttTextController = StreamController<String>.broadcast();
     _isListening = true;
     _audioBuffer.clear();
@@ -132,7 +153,12 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
   void feedAudioData(Int16List samples) {
     if (!_isListening) return;
 
-    // Buffer audio for final decoding
+    // Buffer audio for final decoding (bounded — drop oldest on overflow).
+    if (_audioBuffer.length + samples.length > _maxAudioSamples) {
+      final overflow = _audioBuffer.length + samples.length - _maxAudioSamples;
+      _audioBuffer.removeRange(0, overflow.clamp(0, _audioBuffer.length));
+      debugPrint('[STT] Audio buffer capped at 60s — dropped oldest $overflow samples');
+    }
     _audioBuffer.addAll(samples);
   }
 
@@ -176,8 +202,13 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
 
     _isListening = false;
     _audioBuffer.clear();
-    _sttTextController?.close();
+    final ctrl = _sttTextController;
     _sttTextController = null;
+    if (ctrl != null && !ctrl.isClosed) {
+      try {
+        await ctrl.close();
+      } catch (_) {}
+    }
 
     return finalTranscript;
   }
@@ -221,6 +252,15 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
         final ortPath = p.join(exeDir, 'onnxruntime.dll');
         if (File(ortPath).existsSync()) {
           DynamicLibrary.open(ortPath);
+        } else {
+          // Fallback for `flutter run`
+          final runPath = p.join(Directory.current.path, 'build', 'windows', 'x64', 'runner', 'Debug', 'onnxruntime.dll');
+          final runPathRel = p.join(Directory.current.path, 'build', 'windows', 'x64', 'runner', 'Release', 'onnxruntime.dll');
+          if (File(runPath).existsSync()) {
+            DynamicLibrary.open(runPath);
+          } else if (File(runPathRel).existsSync()) {
+            DynamicLibrary.open(runPathRel);
+          }
         }
       } catch (_) {}
     }
@@ -232,9 +272,8 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
       final rasaModel = p.join(rasaDir, 'vits.onnx');
       final rasaTokens = p.join(rasaDir, 'tokens.txt');
 
-      // Check bundled converted_models workspace fallback
-      final localRasaModel = File('converted_models/vits_rasa13_6in.onnx');
-      final localRasaTokens = File('converted_models/tokens.txt');
+      // NOTE: dev-workspace File('converted_models/...') fallback removed —
+      // invalid on Android (CWD is '/'). Models must be under app-support/models.
 
       final mmsDir = p.join(dir, 'tts', languageCode);
       final mmsModel = p.join(mmsDir, 'vits.onnx');
@@ -249,11 +288,6 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
             File(rasaModel).lengthSync() > 10 * 1024 * 1024) {
           model = rasaModel;
           tokens = rasaTokens;
-        } else if (localRasaModel.existsSync() &&
-            localRasaTokens.existsSync() &&
-            localRasaModel.lengthSync() > 10 * 1024 * 1024) {
-          model = localRasaModel.path;
-          tokens = localRasaTokens.path;
         } else if (File(mmsModel).existsSync() &&
             File(mmsTokens).existsSync() &&
             File(mmsModel).lengthSync() > 10 * 1024 * 1024) {
@@ -319,6 +353,26 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
 
   @override
   Future<void> synthesizeSpeech(
+    String text,
+    String languageCode, [
+    String gender = 'FEMALE',
+    String ttsEngineType = 'META_MMS',
+  ]) async {
+    // Queue: concurrent inbound packets share one AudioPlayer.
+    final completer = Completer<void>();
+    final prev = _ttsLock;
+    _ttsLock = completer.future.then((_) {}, onError: (_) {});
+    await prev;
+    try {
+      await _synthesizeInner(text, languageCode, gender, ttsEngineType);
+      completer.complete();
+    } catch (e) {
+      debugPrint('[TTS] synthesize error: $e');
+      completer.complete();
+    }
+  }
+
+  Future<void> _synthesizeInner(
     String text,
     String languageCode, [
     String gender = 'FEMALE',
@@ -421,6 +475,12 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     final wavPath = p.join(tempDir.path, 'tts_output_$timestamp.wav');
 
+    // Stop previous playback before overwriting — serializes TTS so concurrent
+    // calls don't delete a file still being played.
+    try {
+      await _audioPlayer.stop();
+    } catch (_) {}
+
     final int16Samples = Int16List(samples.length);
     for (int i = 0; i < samples.length; i++) {
       int16Samples[i] = (samples[i] * 32767).clamp(-32768, 32767).toInt();
@@ -447,7 +507,6 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
     await wavFile.writeAsBytes(wavData, flush: true);
 
     try {
-      await _audioPlayer.stop();
       await _audioPlayer.setVolume(1.0);
       await _audioPlayer.setPlaybackRate(1.0);
       await _audioPlayer.play(DeviceFileSource(wavPath));
@@ -456,16 +515,22 @@ class SherpaOnnxSpeechEngine implements SpeechEngine {
       debugPrint('[TTS] AudioPlayer error: $e');
     }
 
-    // Background cleanup of stale temporary WAV files
+    // Background cleanup: delete only files older than 5 minutes.
+    // Previous logic deleted every other tts_output_*.wav immediately,
+    // which raced with concurrent playback and cut audio.
     Future.microtask(() async {
       try {
+        final now = DateTime.now();
         await for (final file in tempDir.list()) {
           if (file is File &&
               file.path.contains('tts_output_') &&
               file.path.endsWith('.wav') &&
               file.path != wavPath) {
             try {
-              await file.delete();
+              final stat = await file.stat();
+              if (now.difference(stat.modified).inMinutes >= 5) {
+                await file.delete();
+              }
             } catch (_) {}
           }
         }

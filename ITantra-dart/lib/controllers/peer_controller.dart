@@ -82,6 +82,11 @@ class PeerController extends ChangeNotifier {
   StreamSubscription<List<BleDiscoveredPeer>>? _blePeersSub;
   StreamSubscription<String>? _bleStatusSub;
 
+  bool _disposed = false;
+  void _safeNotify() {
+    if (!_disposed) notifyListeners();
+  }
+
   PeerController({
     required this.meshManager,
     required this.transceiverManager,
@@ -95,51 +100,51 @@ class PeerController extends ChangeNotifier {
 
     _peersSub = meshManager.peersStream.listen((list) {
       _peers = list;
-      notifyListeners();
+      _safeNotify();
     });
 
     _interfacesSub = meshManager.interfacesStream.listen((list) {
       _interfaces = list;
-      notifyListeners();
+      _safeNotify();
     });
 
     _statusSub = meshManager.statusStream.listen((status) {
       _connectionStatus = status;
-      notifyListeners();
+      _safeNotify();
     });
 
     _transceiverStatusSub = transceiverManager.connectionState.listen((status) {
       _connectionStatus = status;
-      notifyListeners();
+      _safeNotify();
     });
 
     _statsSub = transceiverManager.statsStream.listen((stats) {
       _linkStats = stats;
-      notifyListeners();
+      _safeNotify();
     });
 
     // P2P Subscriptions
     _p2pPeersSub = p2pService.peersStream.listen((list) {
       _p2pPeers = list;
-      notifyListeners();
+      _safeNotify();
     });
 
     _p2pConnSub = p2pService.connectionStream.listen((info) {
       _p2pConnection = info;
-      notifyListeners();
+      _safeNotify();
     });
 
     _p2pStatusSub = p2pService.statusStream.listen((status) {
       _connectionStatus = status;
-      notifyListeners();
+      _safeNotify();
     });
 
     _blePeersSub = bleTransport.peersStream.listen((_) {
-      notifyListeners();
+      _safeNotify();
     });
 
     _bleStatusSub = bleTransport.statusStream.listen((_) {
-      notifyListeners();
+      _safeNotify();
     });
 
     _init();
@@ -150,38 +155,38 @@ class PeerController extends ChangeNotifier {
     await meshManager.startBeaconService(
       customNodeName: 'iTantra Node (${localIp ?? "Mesh"})',
     );
-    notifyListeners();
+    _safeNotify();
   }
 
   // --- Wi-Fi Direct Native Methods ---
   Future<bool> startP2pDiscovery() async {
     final ok = await p2pService.startDiscovery();
-    notifyListeners();
+    _safeNotify();
     return ok;
   }
 
   Future<bool> stopP2pDiscovery() async {
     final ok = await p2pService.stopDiscovery();
-    notifyListeners();
+    _safeNotify();
     return ok;
   }
 
   Future<bool> connectP2p(String deviceAddress) async {
     final ok = await p2pService.connect(deviceAddress);
-    notifyListeners();
+    _safeNotify();
     return ok;
   }
 
   Future<bool> disconnectP2p() async {
     final ok = await p2pService.disconnect();
-    notifyListeners();
+    _safeNotify();
     return ok;
   }
 
   // --- Wi-Fi Mesh Methods ---
   void toggleAutoConnect(bool enable) {
     meshManager.autoConnect = enable;
-    notifyListeners();
+    _safeNotify();
   }
 
   Future<void> toggleBeacon() async {
@@ -192,22 +197,22 @@ class PeerController extends ChangeNotifier {
         customNodeName: 'iTantra Node (${localIp ?? "Mesh"})',
       );
     }
-    notifyListeners();
+    _safeNotify();
   }
 
   Future<void> refreshNetwork() async {
     await meshManager.refreshInterfaces();
-    notifyListeners();
+    _safeNotify();
   }
 
   Future<void> probeSubnet() async {
     await meshManager.probeSubnet();
-    notifyListeners();
+    _safeNotify();
   }
 
   Future<Map<String, dynamic>> testRadioPort() async {
     final res = await transceiverManager.testLocalPortConnection();
-    notifyListeners();
+    _safeNotify();
     return res;
   }
 
@@ -216,69 +221,69 @@ class PeerController extends ChangeNotifier {
     await meshManager.startBeaconService(
       customNodeName: 'iTantra Node (${localIp ?? "Mesh"})',
     );
-    notifyListeners();
+    _safeNotify();
   }
 
   Future<bool> quickConnectHotspotHost() async {
     final host = hotspotHostIp;
     if (host == null) return false;
     final ok = await connectToPeer(host, port: activePort);
-    notifyListeners();
+    _safeNotify();
     return ok;
   }
 
   Future<bool> connectToPeer(String ipAddress, {int? port}) async {
     final destPort = port ?? activePort;
     final success = await meshManager.connectToPeerIp(ipAddress, port: destPort);
-    notifyListeners();
+    _safeNotify();
     return success;
   }
 
   Future<bool> connectToGateway() async {
     final success = await meshManager.connectToGateway();
-    notifyListeners();
+    _safeNotify();
     return success;
   }
 
   // --- BLE Fallback Methods ---
   Future<bool> startBleAdvertising([String? name]) async {
     final ok = await bleTransport.startAdvertising(name);
-    notifyListeners();
+    _safeNotify();
     return ok;
   }
 
   Future<bool> stopBleAdvertising() async {
     final ok = await bleTransport.stopAdvertising();
-    notifyListeners();
+    _safeNotify();
     return ok;
   }
 
   Future<bool> startBleScanning() async {
     final ok = await bleTransport.startScanning();
-    notifyListeners();
+    _safeNotify();
     return ok;
   }
 
   Future<bool> stopBleScanning() async {
     final ok = await bleTransport.stopScanning();
-    notifyListeners();
+    _safeNotify();
     return ok;
   }
 
   Future<bool> connectBlePeer(String address, [String? name]) async {
     final ok = await bleTransport.connectToPeer(address, name);
-    notifyListeners();
+    _safeNotify();
     return ok;
   }
 
   Future<void> disconnectBle() async {
     await bleTransport.disconnect();
-    notifyListeners();
+    _safeNotify();
   }
 
   void simulateBlePeer([String name = 'Simulated Field Radio', String? address]) {
     bleTransport.simulatePeerConnected(name, address);
-    notifyListeners();
+    _safeNotify();
   }
 
   Future<Map<String, dynamic>> testBleLoopback([String testText = 'iTantra Emergency Beacon Loopback Payload']) async {
@@ -290,24 +295,25 @@ class PeerController extends ChangeNotifier {
       timestampMs: DateTime.now().millisecondsSinceEpoch,
     );
     final res = await bleTransport.testLoopback(packet);
-    notifyListeners();
+    _safeNotify();
     return res;
   }
 
   void disconnectPeer(String ipAddress) {
     transceiverManager.disconnectPeer(ipAddress);
-    notifyListeners();
+    _safeNotify();
   }
 
   void disconnectAll() {
     transceiverManager.stop();
     p2pService.disconnect();
     disconnectBle();
-    notifyListeners();
+    _safeNotify();
   }
 
   @override
   void dispose() {
+    _disposed = true;
     _peersSub?.cancel();
     _interfacesSub?.cancel();
     _statusSub?.cancel();

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:record/record.dart';
+import '../utils/app_permissions.dart';
 
 class AudioRecorderService {
   static final AudioRecorderService _instance = AudioRecorderService._internal();
@@ -64,13 +65,20 @@ class AudioRecorderService {
   }
 
   Future<Stream<Int16List>> startRecording() async {
-    _activeClients++;
     if (_pcmStreamController.isClosed) {
       _pcmStreamController = StreamController<Int16List>.broadcast();
     }
 
     try {
       if (_isRecording) {
+        _activeClients++;
+        return _pcmStreamController.stream;
+      }
+
+      // Android 13+: runtime mic grant required — request, don't just check.
+      final granted = await AppPermissions.ensureMicrophone();
+      if (!granted) {
+        debugPrint('[AudioRecorder] Microphone permission denied — not starting');
         return _pcmStreamController.stream;
       }
 
@@ -85,8 +93,9 @@ class AudioRecorderService {
         );
 
         _isRecording = true;
+        _activeClients++;
         _carryByte = null;
-        _recordSubscription?.cancel();
+        await _recordSubscription?.cancel();
         _recordSubscription = stream.listen((byteChunk) {
           if (!_isRecording || _pcmStreamController.isClosed) return;
           final int16List = processPcmChunk(byteChunk);
@@ -106,6 +115,7 @@ class AudioRecorderService {
   Future<void> stopRecording() async {
     if (_activeClients > 0) _activeClients--;
     if (_activeClients > 0) return; // Keep recording for other active clients
+    if (!_isRecording && _recordSubscription == null) return;
 
     try {
       _isRecording = false;
@@ -119,16 +129,16 @@ class AudioRecorderService {
     }
   }
 
-  void dispose() {
-    // Singleton, so we only clean up if explicitly commanded by app teardown
+  Future<void> dispose() async {
+    // Singleton teardown — reset refcount first so stop() actually stops.
     _activeClients = 0;
     _carryByte = null;
     _isRecording = false;
-    stopRecording();
-    _audioRecorder?.dispose();
+    await stopRecording();
+    await _audioRecorder?.dispose();
     _audioRecorder = null;
     if (!_pcmStreamController.isClosed) {
-      _pcmStreamController.close();
+      await _pcmStreamController.close();
     }
   }
 }

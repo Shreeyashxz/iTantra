@@ -1,44 +1,35 @@
-import 'dart:io';
+import 'dart:async';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_onnxruntime/flutter_onnxruntime.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 
-/// Genuine on-device neural transliteration runtime for AI4Bharat IndicXlit.
-///
-/// Unlike the previous placeholder (which downloaded Fairseq `indicxlit.pt`
-/// and renamed it to `.onnx` without inference), this engine:
-///
-/// 1. Loads a real encoder+decoder ONNX bundle from
-///    `<models>/xlit/int8/` (produced by `scripts/export_indicxlit_onnx.py`).
-/// 2. Runs autoregressive Transformer inference via `flutter_onnxruntime`
-///    (Android `.so`, no Windows binaries).
-/// 3. Reports [isReady]==true ONLY when OrtSessions actually exist.
-///    Callers must use the rule-based fallback otherwise and say so in UI.
-///
-/// Bundle layout expected:
-///   models/xlit/int8/encoder_model.onnx
-///   models/xlit/int8/decoder_model.onnx
-///   models/xlit/int8/vocab.json (char vocab: {"token": id})
+// NOTE: flutter_onnxruntime has been commented out to eliminate binary collisions
+// with sherpa_onnx (which powers STT, TTS, and VAD). Neural Xlit defaults to
+// offline high-speed phonological rule-based transliteration.
+
 class NeuralXlitEngine {
   static final NeuralXlitEngine instance = NeuralXlitEngine._internal();
   NeuralXlitEngine._internal();
 
-  final OnnxRuntime _ort = OnnxRuntime();
+  bool get isReady => false;
+  bool get smokeOk => false;
+  String get smokeDetail => 'Neural Xlit commented out (rule-based phonological engine active)';
+  String get bundleDir => '';
 
-  OrtSession? _encoder;
-  OrtSession? _decoder;
-  String _bundleDir = '';
-  String get bundleDir => _bundleDir;
+  Future<bool> init([String? baseDir]) async {
+    debugPrint('[NeuralXlit] Neural Xlit commented out — using rule-based phonological engine');
+    return false;
+  }
 
-  Map<String, int> _vocabToId = {};
-  Map<int, String> _idToVocab = {};
+  Future<String?> transliterate({required String text}) async {
+    // Return null to allow IndicXlitEngine to fall back to rule-based phonological engine
+    return null;
+  }
 
-  bool get isReady => _encoder != null && _decoder != null;
+  Future<void> unload() async {}
+}
 
-  static const int bosId = 0;
-  static const int eosId = 2;
-  static const int unkId = 3;
+/*
+class _NeuralXlitEngineOriginalOnnx {
+
 
   Future<Directory?> _resolveBundleDir([String? baseDir]) async {
     final String root;
@@ -102,7 +93,27 @@ class NeuralXlitEngine {
   }
 
   /// Creates real OrtSessions. Returns true only when inference can run.
+  /// Single-flight: concurrent toggles share one load. On success a smoke
+  /// transliteration (`namaste`) is run immediately so a first run with a real
+  /// bundle is verified, not assumed — failures unload and report fallback.
   Future<bool> init([String? baseDir]) async {
+    final completer = Completer<bool>();
+    final prev = _initLock;
+    _initLock = completer.future.then((_) {}, onError: (_) {});
+    await prev;
+    try {
+      final ok = await _initInner(baseDir);
+      completer.complete(ok);
+      return ok;
+    } catch (e) {
+      debugPrint('[NeuralXlit] init failed (neural OFF): $e');
+      await unload();
+      completer.complete(false);
+      return false;
+    }
+  }
+
+  Future<bool> _initInner([String? baseDir]) async {
     try {
       await unload();
       final dir = await _resolveBundleDir(baseDir);
@@ -115,10 +126,34 @@ class NeuralXlitEngine {
       debugPrint('[NeuralXlit] loading encoder: $encPath');
       _encoder = await _ort.createSession(encPath);
       debugPrint('[NeuralXlit] loading decoder: $decPath');
-      _decoder = await _ort.createSession(decPath);
-      await _loadVocab(dir);
+      try {
+        _decoder = await _ort.createSession(decPath);
+      } catch (e) {
+        // Don't leak the encoder session when the decoder fails.
+        try {
+          await _encoder?.close();
+        } catch (_) {}
+        _encoder = null;
+        rethrow;
+      }
+      final vocabOk = await _loadVocab(dir);
+      if (!vocabOk) {
+        debugPrint('[NeuralXlit] vocab missing/invalid; neural OFF (4-token fallback would blank output)');
+        await unload();
+        return false;
+      }
       _bundleDir = dir.path;
-      debugPrint('[NeuralXlit] neural READY (${dir.path})');
+      // Smoke test: first run with a real bundle must prove inference works.
+      final smoke = await _transliterateInner(text: 'namaste', maxNewTokens: 8);
+      if (smoke == null || smoke.trim().isEmpty) {
+        _smokeDetail = 'sessions created but smoke transliteration returned empty';
+        debugPrint('[NeuralXlit] smoke test FAILED; unloading (fallback active)');
+        await unload();
+        return false;
+      }
+      _smokeOk = true;
+      _smokeDetail = 'smoke: namaste -> $smoke';
+      debugPrint('[NeuralXlit] neural READY (${dir.path}); $_smokeDetail');
       return true;
     } catch (e) {
       debugPrint('[NeuralXlit] init failed (neural OFF): $e');
@@ -154,21 +189,55 @@ class NeuralXlitEngine {
     required String text,
     int maxNewTokens = 32,
   }) async {
+    final completer = Completer<String?>();
+    final prev = _lock;
+    _lock = completer.future.then((_) {}, onError: (_) {});
+    await prev;
+    try {
+      final res = await _transliterateInner(text: text, maxNewTokens: maxNewTokens);
+      completer.complete(res);
+      return res;
+    } catch (_) {
+      completer.complete(null);
+      return null;
+    }
+  }
+
+  Future<String?> _transliterateInner({
+    required String text,
+    int maxNewTokens = 32,
+  }) async {
     if (!isReady) return null;
     final clean = text.trim();
     if (clean.isEmpty) return '';
+    // Bound input — encoder is O(n²).
+    final bounded = clean.length > 128 ? clean.substring(0, 128) : clean;
+    // Feed contract MUST match scripts/export_indicxlit_onnx.py:
+    //   encoder: input_ids[int64](1, seq) + src_lengths[int64](1) -> last_hidden_state
+    //   decoder: input_ids(1, tgt) + encoder_hidden_states -> logits
+    // (No attention_mask anywhere — the script never exports one; sending
+    // undeclared inputs makes ORT throw on first run.)
+    OrtValue? inputTensor;
+    OrtValue? lengthsTensor;
+    OrtValue? hidden;
     try {
-      final inputIds = encodeChars(clean);
+      final inputIds = encodeChars(bounded);
       final seqLen = inputIds.length;
-      final inputTensor = await OrtValue.fromList(inputIds, [1, seqLen]);
-      final mask = List<int>.filled(seqLen, 1);
-      final maskTensor = await OrtValue.fromList(mask, [1, seqLen]);
+      inputTensor = await OrtValue.fromList(inputIds, [1, seqLen]);
+      lengthsTensor = await OrtValue.fromList([seqLen], [1]);
 
       final encOut = await _encoder!.run({
         'input_ids': inputTensor,
-        'attention_mask': maskTensor,
+        'src_lengths': lengthsTensor,
       });
-      final hidden = encOut['last_hidden_state'] ?? encOut.values.first;
+      hidden = encOut['last_hidden_state'] ?? encOut.values.first;
+      // Dispose encoder aux outputs (keep hidden).
+      for (final entry in encOut.entries) {
+        if (entry.key == 'last_hidden_state') continue;
+        try {
+          await entry.value.dispose();
+        } catch (_) {}
+      }
 
       final generated = <int>[bosId];
       for (int step = 0; step < maxNewTokens; step++) {
@@ -176,11 +245,15 @@ class NeuralXlitEngine {
         final decOut = await _decoder!.run({
           'input_ids': decIn,
           'encoder_hidden_states': hidden,
-          'encoder_attention_mask': maskTensor,
         });
         final logits = decOut['logits'] ?? decOut.values.first;
         final flat = await logits.asFlattenedList();
         await decIn.dispose();
+        for (final v in decOut.values) {
+          try {
+            await v.dispose();
+          } catch (_) {}
+        }
         final vocabSize = flat.length ~/ generated.length;
         if (vocabSize <= 0) break;
         final off = (generated.length - 1) * vocabSize;
@@ -197,17 +270,27 @@ class NeuralXlitEngine {
         if (best == eosId) break;
       }
 
-      await inputTensor.dispose();
-      await maskTensor.dispose();
-      await hidden.dispose();
       return decodeIds(generated);
     } catch (e) {
       debugPrint('[NeuralXlit] inference failed: $e');
       return null;
+    } finally {
+      try {
+        await inputTensor?.dispose();
+      } catch (_) {}
+      try {
+        await lengthsTensor?.dispose();
+      } catch (_) {}
+      // hidden is an OrtValue from encOut — dispose after decode.
+      try {
+        await hidden?.dispose();
+      } catch (_) {}
     }
   }
 
   Future<void> unload() async {
+    _smokeOk = false;
+    _smokeDetail = '';
     try {
       await _encoder?.close();
       await _decoder?.close();
@@ -217,3 +300,5 @@ class NeuralXlitEngine {
     _bundleDir = '';
   }
 }
+*/
+

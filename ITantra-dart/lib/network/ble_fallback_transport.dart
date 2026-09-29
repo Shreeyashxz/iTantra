@@ -309,11 +309,29 @@ class BleFallbackTransport {
   /// Fragments a TransceiverPacket into a list of chunks <= [mtu] bytes.
   List<Uint8List> chunkPacket(TransceiverPacket packet, {int mtu = defaultChunkSize, int? packetId}) {
     final rawBytes = packet.toProtoBytes();
-    final totalBytes = rawBytes.length;
-    final pId = (packetId ?? _nextPacketId++) & 0xFFFF;
+    if (rawBytes.length > TransceiverPacket.maxPacketBytes) {
+      throw ArgumentError('packet too large for BLE (${rawBytes.length}B)');
+    }
+    int pId;
+    if (packetId != null) {
+      pId = packetId & 0xFFFF;
+    } else {
+      // Avoid reusing an in-flight packetId (wrap collision would mix fragments).
+      int guard = 0;
+      do {
+        pId = _nextPacketId & 0xFFFF;
+        _nextPacketId = (_nextPacketId + 1) & 0xFFFF;
+        if (_nextPacketId == 0) _nextPacketId = 1;
+        guard++;
+      } while (_reassemblyBuffers.containsKey(pId) && guard < 10000);
+    }
     const headerSize = 4;
     final payloadCapacity = mtu - headerSize;
+    final totalBytes = rawBytes.length;
     final totalFragments = (totalBytes / payloadCapacity).ceil();
+    if (totalFragments < 1 || totalFragments > 255) {
+      throw ArgumentError('packet needs $totalFragments fragments (max 255 for u8 header)');
+    }
 
     final chunks = <Uint8List>[];
     for (int i = 0; i < totalFragments; i++) {
@@ -367,13 +385,21 @@ class BleFallbackTransport {
   /// Ingests an incoming BLE GATT chunk and reassembles fragmented packets.
   void receiveGattChunk(Uint8List chunk) {
     if (chunk.length < 4) return;
+    // Cap reassembly memory: too many pending packets = drop oldest.
+    if (_reassemblyBuffers.length > 16) {
+      cleanStaleBuffers(forceAll: true);
+      return;
+    }
     totalChunksReceived++;
 
     final byteData = ByteData.sublistView(chunk);
     final packetId = byteData.getUint16(0, Endian.big);
     final fragmentIndex = chunk[2];
     final totalFragments = chunk[3];
+    if (totalFragments == 0 || totalFragments > 255) return;
+    if (fragmentIndex >= totalFragments) return;
     final payload = chunk.sublist(4);
+    if (payload.length > defaultChunkSize) return;
 
     _cleanupStaleBuffers();
 
@@ -385,6 +411,13 @@ class BleFallbackTransport {
     // Check if all fragments have arrived
     final fragments = _reassemblyBuffers[packetId]!;
     if (fragments.length == totalFragments) {
+      // Validate expected count matches (protects against mixed pid reuse).
+      if (_expectedFragments[packetId] != totalFragments) {
+        _reassemblyBuffers.remove(packetId);
+        _expectedFragments.remove(packetId);
+        _fragmentTimestamps.remove(packetId);
+        return;
+      }
       // Reassemble complete packet
       final completeBytesBuilder = BytesBuilder(copy: false);
       for (int i = 0; i < totalFragments; i++) {
@@ -395,6 +428,12 @@ class BleFallbackTransport {
       }
 
       final completeBytes = completeBytesBuilder.toBytes();
+      if (completeBytes.length > TransceiverPacket.maxPacketBytes) {
+        _reassemblyBuffers.remove(packetId);
+        _expectedFragments.remove(packetId);
+        _fragmentTimestamps.remove(packetId);
+        return;
+      }
       _reassemblyBuffers.remove(packetId);
       _expectedFragments.remove(packetId);
       _fragmentTimestamps.remove(packetId);
@@ -403,7 +442,9 @@ class BleFallbackTransport {
         final packet = TransceiverPacket.fromProtoBytes(completeBytes);
         totalPacketsReassembled++;
         debugPrint('[BLE Fallback] Packet #$packetId successfully reassembled (${completeBytes.length} bytes)');
-        _incomingPacketsController.add(packet);
+        if (!_incomingPacketsController.isClosed) {
+          _incomingPacketsController.add(packet);
+        }
       } catch (e) {
         debugPrint('[BLE Fallback] Deserialization error on packet #$packetId: $e');
       }
@@ -481,9 +522,9 @@ class BleFallbackTransport {
 
   void dispose() {
     _eventSubscription?.cancel();
-    _incomingPacketsController.close();
-    _statusController.close();
-    _peersController.close();
+    if (!_incomingPacketsController.isClosed) _incomingPacketsController.close();
+    if (!_statusController.isClosed) _statusController.close();
+    if (!_peersController.isClosed) _peersController.close();
     _reassemblyBuffers.clear();
     _expectedFragments.clear();
     _fragmentTimestamps.clear();

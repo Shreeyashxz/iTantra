@@ -1,20 +1,12 @@
-import 'dart:io';
+import 'dart:async';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_onnxruntime/flutter_onnxruntime.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import 'indic_bpe_tokenizer.dart';
-import 'script_normalization_engine.dart';
 
-/// Authentic On-Device Neural Machine Translation (NMT) Engine
-/// for AI4Bharat IndicTrans2 quantized models.
-///
-/// Features:
-/// 1. Standalone ONNX Runtime inference using `flutter_onnxruntime` (single native runtime).
-/// 2. Executes Seq2Seq Transformer Encoder + Decoder graphs.
-/// 3. Autoregressive greedy token generation with EOS stopping.
-/// 4. Ties seamlessly with [IndicBpeTokenizer] for input tensor encoding and output detokenization.
-/// 5. Automatically post-processes output from unified Devanagari space into the target Indic script.
+// NOTE: flutter_onnxruntime has been commented out to eliminate binary collisions
+// with sherpa_onnx (which powers STT, TTS, and VAD). Neural MT defaults to
+// offline tactical lexicon and rule-based translation.
+
+/*
 class _MtSessionBundle {
   final String name;
   final Directory directory;
@@ -44,37 +36,47 @@ class _MtSessionBundle {
     }
   }
 }
+*/
 
-/// Authentic On-Device Neural Machine Translation (NMT) Engine
-/// for AI4Bharat IndicTrans2 quantized models.
-///
-/// Features:
-/// 1. Standalone ONNX Runtime inference using `flutter_onnxruntime` (single native runtime).
-/// 2. Dual-bundle support:
-///    - Indic ➔ Indic (320M INT8): `hari31416/indictrans2-indic-indic-dist-320M-ONNX-int8`
-///    - Indic ➔ English (200M INT8): `hari31416/indictrans2-indic-en-dist-200M-ONNX-int8`
-/// 3. Executes Seq2Seq Transformer Encoder + Decoder graphs.
-/// 4. Autoregressive greedy token generation with EOS stopping.
-/// 5. Ties seamlessly with [IndicBpeTokenizer] for input tensor encoding and output detokenization.
-/// 6. Automatically post-processes output from unified Devanagari space into the target Indic script.
 class NeuralMtEngine {
   static final NeuralMtEngine instance = NeuralMtEngine._internal();
   NeuralMtEngine._internal();
 
-  final OnnxRuntime _ort = OnnxRuntime();
+  bool get isReady => false;
+  bool get isIndicIndicReady => false;
+  bool get isIndicEnReady => false;
 
-  _MtSessionBundle? _indicIndicBundle;
-  _MtSessionBundle? _indicEnBundle;
-
-  bool get isReady => _indicIndicBundle != null || _indicEnBundle != null;
-  bool get isIndicIndicReady => _indicIndicBundle != null;
-  bool get isIndicEnReady => _indicEnBundle != null;
-
-  String _loadedModelName = '';
+  static const String _loadedModelName = '';
   String get loadedModelName => _loadedModelName;
+
+  IndicBpeTokenizer get tokenizer => IndicBpeTokenizer.instance;
+
+  Future<bool> init([String? baseDir]) async {
+    debugPrint('[NeuralMtEngine] Neural MT commented out — using tactical lexicon & rule-based engine');
+    return false;
+  }
+
+  Future<String?> translate({
+    required String text,
+    required String sourceLang,
+    required String targetLang,
+  }) async {
+    // Return null to allow IndicTransEngine to fall back to tactical lexicon & rules
+    return null;
+  }
+
+  Future<void> unload() async {}
+}
+
+/*
+class _NeuralMtEngineOriginalOnnx {
+
 
   final int _decoderStartId = 2;
   final int _eosId = IndicBpeTokenizer.eosId;
+
+  // OrtSessions are not thread-safe — serialize concurrent inbound translates.
+  Future<void> _translateLock = Future.value();
 
   IndicBpeTokenizer get tokenizer =>
       _indicIndicBundle?.tokenizer ?? _indicEnBundle?.tokenizer ?? IndicBpeTokenizer.instance;
@@ -177,6 +179,32 @@ class NeuralMtEngine {
     required String targetLang,
     int maxNewTokens = 64,
   }) async {
+    // Serialize: concurrent inbound packets share one OrtSession.
+    final completer = Completer<String?>();
+    final prev = _translateLock;
+    _translateLock = completer.future.then((_) {}, onError: (_) {});
+    await prev;
+    try {
+      final res = await _translateInner(
+        text: text,
+        sourceLang: sourceLang,
+        targetLang: targetLang,
+        maxNewTokens: maxNewTokens,
+      );
+      completer.complete(res);
+      return res;
+    } catch (e) {
+      completer.complete(null);
+      return null;
+    }
+  }
+
+  Future<String?> _translateInner({
+    required String text,
+    required String sourceLang,
+    required String targetLang,
+    int maxNewTokens = 64,
+  }) async {
     if (!isReady) {
       return null;
     }
@@ -212,9 +240,15 @@ class NeuralMtEngine {
 
       // 3. Prepare Encoder Tensors
       final seqLen = tokenIds.length;
-      final inputIdsTensor = await OrtValue.fromList(tokenIds, [1, seqLen]);
-      final attentionMask = List<int>.filled(seqLen, 1);
-      final attnMaskTensor = await OrtValue.fromList(attentionMask, [1, seqLen]);
+      // Bound input length — encoder is O(n²) and runs on UI isolate.
+      if (seqLen > 128) {
+        debugPrint('[NeuralMtEngine] Input truncated from $seqLen to 128 tokens');
+        tokenIds.removeRange(128, tokenIds.length);
+      }
+      final effLen = tokenIds.length;
+      final inputIdsTensor = await OrtValue.fromList(tokenIds, [1, effLen]);
+      final attentionMask = List<int>.filled(effLen, 1);
+      final attnMaskTensor = await OrtValue.fromList(attentionMask, [1, effLen]);
 
       // 4. Run Encoder Graph
       final encOutputs = await bundle.encoder.run({
@@ -224,6 +258,18 @@ class NeuralMtEngine {
 
       final lastHiddenState = encOutputs['last_hidden_state'];
       if (lastHiddenState == null) {
+        // Dispose everything to avoid native leaks before throwing.
+        for (final v in encOutputs.values) {
+          try {
+            await v.dispose();
+          } catch (_) {}
+        }
+        try {
+          await inputIdsTensor.dispose();
+        } catch (_) {}
+        try {
+          await attnMaskTensor.dispose();
+        } catch (_) {}
         throw StateError('Encoder did not return last_hidden_state');
       }
 
@@ -248,6 +294,12 @@ class NeuralMtEngine {
         final logitsFlat = await logitsValue.asFlattenedList();
 
         await decInputTensor.dispose();
+        // Dispose all decoder outputs (logits + any aux) to avoid native leak.
+        for (final v in decOutputs.values) {
+          try {
+            await v.dispose();
+          } catch (_) {}
+        }
 
         // Extract argmax over the vocabulary for the last token position
         final vocabSize = logitsFlat.length ~/ generatedTokenIds.length;
@@ -273,10 +325,16 @@ class NeuralMtEngine {
         }
       }
 
-      // Cleanup encoder tensors
+      // Cleanup encoder tensors (dispose aux outputs too).
       await inputIdsTensor.dispose();
       await attnMaskTensor.dispose();
       await lastHiddenState.dispose();
+      for (final entry in encOutputs.entries) {
+        if (entry.key == 'last_hidden_state') continue;
+        try {
+          await entry.value.dispose();
+        } catch (_) {}
+      }
 
       // 6. Detokenize generated token sequence
       final rawDecoded = bundle.tokenizer.decode(generatedTokenIds, targetLang: tgt);
@@ -315,3 +373,4 @@ class NeuralMtEngine {
     }
   }
 }
+*/

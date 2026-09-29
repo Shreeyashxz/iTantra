@@ -16,7 +16,14 @@ Then quantize (dynamic INT8, Android-friendly), validate one round-trip
 `LanguagePackManager.indicXlitOnnxBaseUrl`.
 
 The Dart side (`NeuralXlitEngine`) loads exactly this bundle and reports
-neural-ready ONLY when both OrtSessions are created.
+neural-ready ONLY when both OrtSessions are created AND a smoke
+transliteration succeeds.
+
+Dart/ORT feed contract (MUST match — the app sends exactly these names):
+    encoder: input_ids[int64](1, seq) + src_lengths[int64](1) -> last_hidden_state
+    decoder: input_ids(1, tgt) + encoder_hidden_states -> logits
+There is intentionally NO attention_mask input. Older drafts of the Dart code
+sent one and ORT threw on first run; keep both sides on this contract.
 """
 from __future__ import annotations
 

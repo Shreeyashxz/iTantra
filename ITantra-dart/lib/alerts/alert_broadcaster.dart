@@ -1,4 +1,4 @@
-import 'dart:math';
+import 'package:uuid/uuid.dart';
 import '../network/transceiver_manager.dart';
 import '../proto/transceiver_packet.dart';
 
@@ -12,8 +12,13 @@ class AlertBroadcaster {
     String languageCode = 'hi',
     required String alertText,
   }) async {
-    final effectiveSenderId = senderId ??
-        'DEV_${Random().nextInt(90000) + 10000}';
+    final trimmed = alertText.trim();
+    if (trimmed.isEmpty || trimmed.length > TransceiverPacket.maxTextChars) return;
+    // Stable IDs come from TransceiverController.deviceId (persisted).
+    // Fallback uses UUID to avoid 90k-space collisions of Random().nextInt.
+    final effectiveSenderId = (senderId != null && senderId.trim().isNotEmpty)
+        ? senderId.trim()
+        : 'DEV_${const Uuid().v4().substring(0, 8).toUpperCase()}';
 
     final packet = TransceiverPacket(
       senderId: effectiveSenderId,

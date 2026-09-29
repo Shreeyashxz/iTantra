@@ -197,7 +197,7 @@ class _ModelTestLabScreenState extends State<ModelTestLabScreen> {
     _audioSub?.cancel();
     _vadSub?.cancel();
     _sttSub?.cancel();
-    _recorder.stopRecording();
+    _recorder.dispose();
     _vad.stopVad();
     _t2Controller.dispose();
     _t3Controller.dispose();

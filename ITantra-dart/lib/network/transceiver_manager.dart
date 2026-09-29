@@ -40,6 +40,8 @@ class TransceiverManager {
   String? get lastError => _lastError;
 
   ServerSocket? _serverSocket;
+  StreamSubscription<Socket>? _serverSubscription;
+  StreamSubscription<String>? _bleStatusSubscription;
   final Map<String, Socket> _peerSockets = {};
   final Map<String, PeerLinkStats> _peerStats = {};
 
@@ -90,9 +92,12 @@ class TransceiverManager {
     _bleSubscription?.cancel();
     _bleSubscription = bleTransport.incomingPackets.listen((packet) {
       totalPacketsReceived++;
-      _incomingPacketsController.add(packet);
+      if (!_incomingPacketsController.isClosed) {
+        _incomingPacketsController.add(packet);
+      }
     });
-    bleTransport.statusStream.listen((_) {
+    _bleStatusSubscription?.cancel();
+    _bleStatusSubscription = bleTransport.statusStream.listen((_) {
       _updateConnectionState();
     });
   }
@@ -115,6 +120,7 @@ class TransceiverManager {
   }
 
   void _updateConnectionState() {
+    if (_connectionStateController.isClosed || _statsController.isClosed) return;
     _connectionStateController.add(currentStatusString);
     _statsController.add(activePeerStats);
   }
@@ -144,7 +150,8 @@ class TransceiverManager {
         _updateConnectionState();
         debugPrint('Transceiver server active on 0.0.0.0:$_activePort');
 
-        _serverSocket!.listen(
+        await _serverSubscription?.cancel();
+        _serverSubscription = _serverSocket!.listen(
           (socket) {
             final remoteIp = socket.remoteAddress.address;
             debugPrint(
@@ -163,7 +170,9 @@ class TransceiverManager {
         _bleSubscription?.cancel();
         _bleSubscription = bleTransport.incomingPackets.listen((packet) {
           totalPacketsReceived++;
-          _incomingPacketsController.add(packet);
+          if (!_incomingPacketsController.isClosed) {
+            _incomingPacketsController.add(packet);
+          }
         });
 
         _startHeartbeat();
@@ -284,10 +293,21 @@ class TransceiverManager {
         }
 
         buffer.add(data);
+        // Hard cap: drop oversized buffers instead of OOMing.
+        if (buffer.length > TransceiverPacket.maxPacketBytes + 16) {
+          debugPrint('[Transceiver] Oversized frame from $ipAddress — dropping buffer');
+          buffer.clear();
+          return;
+        }
         var currentBytes = buffer.toBytes();
 
         while (true) {
           final res = TransceiverPacket.parseDelimited(currentBytes);
+          if (res.bytesConsumed == -1) {
+            debugPrint('[Transceiver] Corrupt framing from $ipAddress — dropping buffer');
+            buffer.clear();
+            break;
+          }
           if (res.packet != null) {
             final packet = res.packet!;
             totalPacketsReceived++;
@@ -295,8 +315,10 @@ class TransceiverManager {
               stats.packetsReceived++;
             }
 
-            // Handle ping packet for RTT measurement
-            if (packet.transcript == '__ITANTRA_PING__') {
+            // Ping is type==ack + SYSTEM + magic. Voice saying the magic words
+            // must NOT be treated as ping (previous bug checked transcript only).
+            if (packet.type == PacketType.ack &&
+                packet.transcript == TransceiverPacket.pingMagic) {
               _sendAck(socket, packet.timestampMs);
             } else if (packet.type == PacketType.ack &&
                 packet.transcript.startsWith('PONG:')) {
@@ -304,13 +326,17 @@ class TransceiverManager {
                   int.tryParse(packet.transcript.substring(5)) ?? 0;
               if (sentTime > 0 && stats != null) {
                 stats.rttMs = DateTime.now().millisecondsSinceEpoch - sentTime;
-                _statsController.add(activePeerStats);
+                if (!_statsController.isClosed) {
+                  _statsController.add(activePeerStats);
+                }
               }
             } else {
               if (packet.type == PacketType.voice) {
                 _sendAck(socket, packet.timestampMs);
               }
-              _incomingPacketsController.add(packet);
+              if (!_incomingPacketsController.isClosed) {
+                _incomingPacketsController.add(packet);
+              }
             }
 
             currentBytes = currentBytes.sublist(res.bytesConsumed);
@@ -366,6 +392,15 @@ class TransceiverManager {
   }
 
   Future<void> sendPacket(TransceiverPacket packet) async {
+    // Basic validation: reject empty/spoofed sender, oversized payloads.
+    if (packet.senderId.trim().isEmpty || packet.senderId.length > TransceiverPacket.maxIdChars) {
+      debugPrint('[Transceiver] Refusing to send packet with invalid senderId');
+      return;
+    }
+    if (packet.transcript.length > TransceiverPacket.maxTextChars) {
+      debugPrint('[Transceiver] Refusing to send oversized transcript');
+      return;
+    }
     if (_peerSockets.isEmpty) {
       if (bleTransport.isConnected) {
         debugPrint(
@@ -380,6 +415,13 @@ class TransceiverManager {
     }
 
     final payload = packet.toProtoBytes();
+    // Length-delimited header size for accurate stats.
+    int headerLen = 1;
+    var v = payload.length;
+    while ((v & ~0x7F) != 0) {
+      headerLen++;
+      v >>= 7;
+    }
     totalPacketsSent++;
 
     for (final entry in Map<String, Socket>.from(_peerSockets).entries) {
@@ -392,7 +434,7 @@ class TransceiverManager {
         final stats = _peerStats[ip];
         if (stats != null) {
           stats.packetsSent++;
-          stats.bytesSent += payload.length;
+          stats.bytesSent += payload.length + headerLen;
           stats.lastActivity = DateTime.now();
         }
       } catch (e) {
@@ -409,7 +451,7 @@ class TransceiverManager {
       if (_peerSockets.isEmpty) return;
       final pingPacket = TransceiverPacket(
         senderId: 'SYSTEM',
-        transcript: '__ITANTRA_PING__',
+        transcript: TransceiverPacket.pingMagic,
         type: PacketType.ack,
         timestampMs: DateTime.now().millisecondsSinceEpoch,
       );
@@ -426,7 +468,11 @@ class TransceiverManager {
     _isRunning = false;
     _heartbeatTimer?.cancel();
     _heartbeatTimer = null;
-    _serverSocket?.close();
+    _serverSubscription?.cancel();
+    _serverSubscription = null;
+    try {
+      _serverSocket?.close();
+    } catch (_) {}
     _serverSocket = null;
     for (final s in _peerSockets.values) {
       s.destroy();
@@ -439,9 +485,10 @@ class TransceiverManager {
   void dispose() {
     stop();
     _bleSubscription?.cancel();
+    _bleStatusSubscription?.cancel();
     bleTransport.dispose();
-    _incomingPacketsController.close();
-    _connectionStateController.close();
-    _statsController.close();
+    if (!_incomingPacketsController.isClosed) _incomingPacketsController.close();
+    if (!_connectionStateController.isClosed) _connectionStateController.close();
+    if (!_statsController.isClosed) _statsController.close();
   }
 }

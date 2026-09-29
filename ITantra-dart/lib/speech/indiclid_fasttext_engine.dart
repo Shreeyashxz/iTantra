@@ -117,6 +117,7 @@ class IndicLIDFastTextEngine {
   };
 
   /// Resolves the on-disk .bin path without claiming it is loaded.
+  /// 100MB floor matches isLidAvailable — partials fall through to heuristic.
   Future<String?> resolveModelPath() async {
     try {
       final docDir = await getApplicationSupportDirectory();
@@ -125,7 +126,7 @@ class IndicLIDFastTextEngine {
         File(p.join(docDir.path, 'models', 'indiclid_fasttext.bin')),
       ];
       for (final f in candidates) {
-        if (await f.exists() && (await f.length()) > 1024) return f.path;
+        if (await f.exists() && (await f.length()) > 100 * 1024 * 1024) return f.path;
       }
       return null;
     } catch (_) {

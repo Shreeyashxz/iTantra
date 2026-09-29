@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import '../data/app_database.dart';
 import '../data/entities/user_settings_entity.dart';
 import '../speech/indic_xlit_engine.dart';
+import '../speech/neural_xlit_engine.dart';
 import '../speech/indiclid_fasttext_engine.dart';
 import '../speech/language_pack_manager.dart';
 import '../speech/neural_mt_engine.dart';
@@ -92,6 +93,10 @@ class SettingsController extends ChangeNotifier {
 
   void _applySettings(UserSettingsEntity s) {
     ScriptNormalizationEngine.setModeFromString(s.normalizerMode);
+    // Persisted NEURAL mode (app restart): make Xlit work without requiring toggle.
+    if (s.normalizerMode == 'NEURAL_INDIC_XLIT') {
+      IndicXlitEngine.instance.ensureReady();
+    }
   }
 
   Future<void> checkModelStatus() async {
@@ -327,10 +332,21 @@ class SettingsController extends ChangeNotifier {
   bool get isAdvancedNormalizer => _settings.normalizerMode == 'ADVANCED';
   bool get isLegacyNormalizer => _settings.normalizerMode == 'LEGACY_RULE_BASED';
   bool get isNeuralIndicXlit => _settings.normalizerMode == 'NEURAL_INDIC_XLIT';
+  String get xlitStatusLabel => IndicXlitEngine.instance.statusLabel;
 
   Future<void> updateNormalizerMode(String mode) async {
+    final leavingNeural = _settings.normalizerMode == 'NEURAL_INDIC_XLIT' && mode != 'NEURAL_INDIC_XLIT';
     _settings = _settings.copyWith(normalizerMode: mode);
+    ScriptNormalizationEngine.setModeFromString(mode);
+    // Toggle-on: make Xlit work immediately (neural if present, else offline fallback).
+    if (mode == 'NEURAL_INDIC_XLIT') {
+      final neural = await IndicXlitEngine.instance.ensureReady();
+      debugPrint('[Settings] Xlit ready (neural=$neural): ${IndicXlitEngine.instance.statusLabel}');
+    } else if (leavingNeural) {
+      await NeuralXlitEngine.instance.unload();
+    }
     await database.saveSettings(_settings);
+    notifyListeners();
   }
 
   Future<void> toggleNormalizerMode() async {
@@ -347,8 +363,15 @@ class SettingsController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     _downloadSubscription?.cancel();
     _settingsSubscription?.cancel();
     super.dispose();
+  }
+
+  bool _disposed = false;
+  @override
+  void notifyListeners() {
+    if (!_disposed) super.notifyListeners();
   }
 }

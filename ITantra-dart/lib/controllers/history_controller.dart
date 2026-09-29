@@ -14,10 +14,12 @@ class HistoryController extends ChangeNotifier {
   String get searchQuery => _searchQuery;
 
   StreamSubscription<List<MessageEntity>>? _dbSubscription;
+  bool _disposed = false;
 
   HistoryController({required this.database}) {
     _loadMessages();
     _dbSubscription = database.messagesStream.listen((list) {
+      if (_disposed) return;
       _allMessages = list;
       _applyFilter();
     });
@@ -25,6 +27,7 @@ class HistoryController extends ChangeNotifier {
 
   Future<void> _loadMessages() async {
     _allMessages = await database.getAllMessages();
+    if (_disposed) return;
     _applyFilter();
   }
 
@@ -42,11 +45,12 @@ class HistoryController extends ChangeNotifier {
         return m.text.toLowerCase().contains(q) || m.senderId.toLowerCase().contains(q);
       }).toList();
     }
-    notifyListeners();
+    if (!_disposed) notifyListeners();
   }
 
   @override
   void dispose() {
+    _disposed = true;
     _dbSubscription?.cancel();
     super.dispose();
   }

@@ -31,6 +31,7 @@ class CommPipeline {
   bool _isVadAutoMode = false;
   bool get isVadAutoMode => _isVadAutoMode;
   Timer? _vadSilenceTimer;
+  int _vadGeneration = 0;
   bool _hasActiveUtterance = false;
 
   CommPipeline({
@@ -46,6 +47,11 @@ class CommPipeline {
     void Function(String partialText)? onTranscript,
     void Function(bool isVoiceDetected)? onVoiceDetected,
   }) async {
+    if (_isTransmitting) return; // guard double-start (PTT bounce)
+    if (_isVadAutoMode) {
+      debugPrint('[CommPipeline] Refusing PTT while VAD auto-mode active');
+      return;
+    }
     // Guard: ensure STT model is initialized before starting mic
     if (!speechEngine.isSttLoaded) {
       debugPrint('[CommPipeline] STT not loaded — attempting auto-init before transmission...');
@@ -63,12 +69,18 @@ class CommPipeline {
     _onVoiceDetectedCallback = onVoiceDetected;
 
     final audioStream = await audioRecorder.startRecording();
+    // If mic permission denied, recorder returns a dead stream — abort cleanly.
+    if (!audioRecorder.isRecording) {
+      debugPrint('[CommPipeline] ABORT: microphone not recording (permission?)');
+      _isTransmitting = false;
+      return;
+    }
     final vadStream = vadEngine.startVad(audioStream);
     final textStream = speechEngine.startListening(languageCode);
 
     bool isSpeechActive = false;
 
-    _vadSubscription?.cancel();
+    await _vadSubscription?.cancel();
     _vadSubscription = vadStream.listen((isSpeech) {
       _isVoiceDetected = isSpeech;
       _onVoiceDetectedCallback?.call(isSpeech);
@@ -82,7 +94,7 @@ class CommPipeline {
       isSpeechActive = isSpeech;
     });
 
-    _audioSubscription?.cancel();
+    await _audioSubscription?.cancel();
     _audioSubscription = audioStream.listen((chunk) {
       // C1: Only feed audio to STT when speech is active (or initial onset buffer)
       if (isSpeechActive) {
@@ -90,7 +102,7 @@ class CommPipeline {
       }
     });
 
-    _sttSubscription?.cancel();
+    await _sttSubscription?.cancel();
     _sttSubscription = textStream.listen((text) {
       if (text.trim().isNotEmpty) {
         final normalizedText = ScriptNormalizationEngine.normalizeFromStt(text, languageCode);
@@ -119,6 +131,9 @@ class CommPipeline {
 
   /// Stops transmission and returns the final transcript (for the controller to save to DB).
   Future<String> stopTransmissionAndGetTranscript() async {
+    if (!_isTransmitting && _audioSubscription == null && _vadSubscription == null) {
+      return '';
+    }
     _isTransmitting = false;
     _isVoiceDetected = false;
     _onVoiceDetectedCallback?.call(false);
@@ -167,6 +182,10 @@ class CommPipeline {
     void Function(bool isVoiceDetected)? onVoiceDetected,
   }) async {
     if (_isVadAutoMode) return;
+    if (_isTransmitting) {
+      debugPrint('[CommPipeline] Refusing VAD auto-mode while PTT active');
+      return;
+    }
     _isVadAutoMode = true;
     _currentSenderId = senderId;
     _currentLanguageCode = languageCode;
@@ -174,9 +193,14 @@ class CommPipeline {
     _onVoiceDetectedCallback = onVoiceDetected;
 
     final audioStream = await audioRecorder.startRecording();
+    if (!audioRecorder.isRecording) {
+      debugPrint('[CommPipeline] VAD auto-mode ABORT: mic not recording');
+      _isVadAutoMode = false;
+      return;
+    }
     final vadStream = vadEngine.startVad(audioStream);
 
-    _vadSubscription?.cancel();
+    await _vadSubscription?.cancel();
     _vadSubscription = vadStream.listen((isSpeech) async {
       _isVoiceDetected = isSpeech;
       _onVoiceDetectedCallback?.call(isSpeech);
@@ -195,12 +219,16 @@ class CommPipeline {
         }
       } else {
         if (_hasActiveUtterance && _vadSilenceTimer == null) {
+          final gen = _vadGeneration;
           _vadSilenceTimer = Timer(const Duration(milliseconds: 1200), () async {
-            if (!_hasActiveUtterance) return;
+            // Stale timer (stopVadAutoMode bumped generation) — ignore.
+            if (gen != _vadGeneration || !_hasActiveUtterance) return;
             _hasActiveUtterance = false;
             _isTransmitting = false;
 
             final transcript = await speechEngine.stopListeningAndTranscribe(_currentLanguageCode);
+            // Double-check generation after async gap — stop may have raced us.
+            if (gen != _vadGeneration) return;
             if (transcript.trim().isNotEmpty && _currentSenderId != null && _currentLanguageCode != null) {
               final normalized = ScriptNormalizationEngine.normalizeFromStt(transcript, _currentLanguageCode!);
               _onTranscriptCallback?.call(normalized);
@@ -218,7 +246,7 @@ class CommPipeline {
       }
     });
 
-    _audioSubscription?.cancel();
+    await _audioSubscription?.cancel();
     _audioSubscription = audioStream.listen((chunk) {
       if (_hasActiveUtterance) {
         speechEngine.feedAudioData(chunk);
@@ -227,6 +255,7 @@ class CommPipeline {
   }
 
   Future<void> stopVadAutoMode() async {
+    _vadGeneration++; // invalidates any queued silence timer
     _isVadAutoMode = false;
     _hasActiveUtterance = false;
     _isTransmitting = false;

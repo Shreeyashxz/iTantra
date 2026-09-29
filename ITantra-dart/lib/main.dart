@@ -11,6 +11,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'alerts/alert_broadcaster.dart';
 import 'speech/indic_trans_engine.dart';
 import 'speech/neural_mt_engine.dart';
+import 'utils/app_permissions.dart';
 import 'alerts/alert_receiver.dart';
 import 'controllers/history_controller.dart';
 import 'controllers/peer_controller.dart';
@@ -94,6 +95,13 @@ void main() async {
 
   await IndicTransEngine.loadLexicon();
 
+  // Pre-request mesh runtime permissions so discovery doesn't silently fail.
+  // Mic is requested lazily on first PTT (AppPermissions.ensureMicrophone).
+  try {
+    await AppPermissions.ensureMeshPermissions();
+    await AppPermissions.ensureNotifications();
+  } catch (_) {}
+
   // Core singletons (matching Hilt AppModule / SpeechModule / TransportModule / DatabaseModule)
   final database = AppDatabase.instance;
   final languagePackManager = LanguagePackManager();
@@ -117,18 +125,34 @@ void main() async {
     transceiverManager: transceiverManager,
   );
 
-  AppLifecycleListener(
+  // Keep a strong reference — a discarded AppLifecycleListener may be GC'd
+  // and background mic/sockets would keep running on Android.
+  final lifecycleListener = AppLifecycleListener(
     onStateChange: (state) {
       if (state == AppLifecycleState.detached) {
+        // Sync teardown; callbacks can't await — fire-and-forget safely.
         AppDatabase.instance.close();
         NeuralMtEngine.instance.unload();
         speechEngine.release();
         transceiverManager.dispose();
         meshManager.dispose();
+        p2pService.dispose();
+        alertReceiver.dispose();
         commPipeline.dispose();
+        audioRecorder.dispose();
+        vadEngine.release();
+      } else if (state == AppLifecycleState.paused ||
+          state == AppLifecycleState.inactive ||
+          state == AppLifecycleState.hidden) {
+        // Stop mic + timers when backgrounded (privacy + battery).
+        commPipeline.stopVadAutoMode();
+        audioRecorder.stopRecording();
+        vadEngine.stopVad();
       }
     },
   );
+  // ignore: unused_local_variable — retained for lifecycle duration via closure.
+  debugPrint('[Init] Lifecycle listener attached: $lifecycleListener');
 
   runApp(
     MultiProvider(

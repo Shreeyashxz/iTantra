@@ -15,6 +15,11 @@ class IncomingPacketHandler {
   final IndicTransEngine transEngine;
 
   StreamSubscription<TransceiverPacket>? _subscription;
+  // Dedup across Wi-Fi + BLE dual delivery (packetId, fallback sender|time).
+  final Set<String> _seenKeys = {};
+  static const int _maxSeen = 500;
+  // Serialize inbound TTS so bursts don't overlap/cut each other.
+  Future<void> _chain = Future.value();
 
   IncomingPacketHandler({
     required this.transceiverManager,
@@ -24,7 +29,30 @@ class IncomingPacketHandler {
   });
 
   void start(String Function() getSelectedLanguage, bool Function() getIsMtEnabled, String Function() getTtsEngineType) {
-    _subscription = transceiverManager.incomingPackets.listen((packet) async {
+    _getSelectedLanguage = getSelectedLanguage;
+    _getIsMtEnabled = getIsMtEnabled;
+    _getTtsEngineType = getTtsEngineType;
+    _subscription = transceiverManager.incomingPackets.listen((packet) {
+      // Chain: one packet at a time, no interleave.
+      final prev = _chain;
+      _chain = prev.then((_) => _handle(packet)).catchError((e) {
+        debugPrint('[IncomingPacketHandler] chained error: $e');
+      });
+    });
+  }
+
+  String Function()? _getSelectedLanguage;
+  bool Function()? _getIsMtEnabled;
+  String Function()? _getTtsEngineType;
+
+  Future<void> _handle(TransceiverPacket packet) async {
+      // Dedup first — before DB insert and TTS.
+      final key = packet.dedupKey;
+      if (_seenKeys.contains(key)) return;
+      _seenKeys.add(key);
+      if (_seenKeys.length > _maxSeen) {
+        _seenKeys.remove(_seenKeys.first);
+      }
       try {
         final entity = MessageEntity(
           senderId: packet.senderId,
@@ -40,9 +68,9 @@ class IncomingPacketHandler {
           final settings = await database.getSettings();
           if (settings.autoPlayAudio) {
             String textToSpeak = packet.transcript;
-            final selectedLanguage = getSelectedLanguage();
-            final isMtEnabled = getIsMtEnabled();
-            final ttsEngineType = getTtsEngineType();
+            final selectedLanguage = _getSelectedLanguage?.call() ?? packet.languageCode;
+            final isMtEnabled = _getIsMtEnabled?.call() ?? false;
+            final ttsEngineType = _getTtsEngineType?.call() ?? 'META_MMS';
 
             final String speechLang = (isMtEnabled && packet.languageCode != selectedLanguage)
                 ? selectedLanguage
@@ -84,7 +112,6 @@ class IncomingPacketHandler {
       } catch (e) {
         debugPrint('[IncomingPacketHandler] Error handling incoming packet: $e');
       }
-    });
   }
 
   void dispose() {

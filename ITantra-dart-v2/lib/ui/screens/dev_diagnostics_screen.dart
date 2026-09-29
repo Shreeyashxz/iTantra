@@ -136,7 +136,7 @@ class _DevDiagnosticsScreenState extends State<DevDiagnosticsScreen>
     _audioSub?.cancel();
     _vadSub?.cancel();
     _sttTextSub?.cancel();
-    _recorder.stopRecording();
+    _recorder.dispose();
     _vad.release();
     _ttsTextController.dispose();
     super.dispose();

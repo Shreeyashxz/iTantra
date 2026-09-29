@@ -29,7 +29,7 @@ class SileroVadEngine implements VadEngine {
   int _consecutiveSilenceFrames = 0;
   int _consecutiveSpeechFrames = 0;
   StreamSubscription<Int16List>? _subscription;
-  final _speechStateController = StreamController<bool>.broadcast();
+  StreamController<bool> _speechStateController = StreamController<bool>.broadcast();
 
   // Running noise floor estimator (fallback)
   double _noiseFloorRms = 0.008;
@@ -116,12 +116,17 @@ class SileroVadEngine implements VadEngine {
 
   @override
   Stream<bool> startVad(Stream<Int16List> audioData) {
+    if (_speechStateController.isClosed) {
+      _speechStateController = StreamController<bool>.broadcast();
+    }
     _subscription?.cancel();
     _subscription = audioData.listen((chunk) {
       final isSpeech = _detectVoiceActivity(chunk);
       if (isSpeech != _isSpeechActive) {
         _isSpeechActive = isSpeech;
-        _speechStateController.add(_isSpeechActive);
+        if (!_speechStateController.isClosed) {
+          _speechStateController.add(_isSpeechActive);
+        }
       }
     });
     return _speechStateController.stream;
@@ -224,5 +229,10 @@ class SileroVadEngine implements VadEngine {
     } catch (_) {}
     _isNeuralInitialized = false;
     _ringBuffer.clear();
+    if (!_speechStateController.isClosed) {
+      try {
+        _speechStateController.close();
+      } catch (_) {}
+    }
   }
 }

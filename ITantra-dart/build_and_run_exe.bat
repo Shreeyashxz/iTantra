@@ -1,5 +1,5 @@
 @echo off
-setlocal EnableDelayedExpansion
+setlocal
 echo ========================================================
 echo       iTantra - Windows Interactive Build ^& Runner
 echo ========================================================
@@ -19,7 +19,7 @@ echo.
 
 echo Select Execution Mode:
 echo   [1] Interactive Dev Mode (Hot Reload 'r', Hot Restart 'R') [DEFAULT]
-echo   [2] Build Release & Launch Standalone EXE
+echo   [2] Build Release ^& Launch Standalone EXE
 echo.
 
 set "MODE=1"
@@ -40,14 +40,21 @@ echo       [w]  Dump widget hierarchy
 echo       [q]  Quit and close app
 echo ========================================================
 echo.
-flutter run -d windows
+call flutter run -d windows
+if %errorlevel% neq 0 (
+    echo.
+    echo [ERROR] Flutter run failed with exit code %errorlevel%.
+)
+echo.
+echo Session ended.
+pause
 goto END
 
 :RELEASE_MODE
 echo.
 echo [*] Building Windows Release Executable (flutter build windows --release)...
 echo ========================================================
-cmd.exe /c "flutter build windows --release"
+call flutter build windows --release
 if %errorlevel% neq 0 (
     echo.
     echo [ERROR] Flutter Windows build failed with exit code %errorlevel%.
@@ -74,7 +81,7 @@ echo.
 echo ========================================================
 echo [SUCCESS] iTantra application built and launched!
 echo ========================================================
-ping -n 3 127.0.0.1 >nul
+pause
 goto END
 
 :END

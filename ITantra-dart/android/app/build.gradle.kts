@@ -19,10 +19,15 @@ android {
         applicationId = "com.itantra.itantra_dart"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // Pinned to API 24 per PLATFORM_ANDROID_REQUIREMENTS (was flutter.minSdkVersion implicit).
+        minSdk = 24
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        ndk {
+            // Primary target arm64-v8a per platform spec; keep v7a + x86_64 for field/emulator.
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
     }
 
     buildTypes {
@@ -61,5 +66,5 @@ flutter {
 }
 
 dependencies {
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.27.0")
+    // Let flutter_onnxruntime and sherpa_onnx resolve their own compatible onnxruntime versions
 }

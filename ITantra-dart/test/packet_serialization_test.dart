@@ -43,13 +43,19 @@ void main() {
       final bytes1 = packet1.toProtoBytes();
       final bytes2 = packet2.toProtoBytes();
 
+      void addDelimited(BytesBuilder b, Uint8List payload) {
+        var v = payload.length;
+        while ((v & ~0x7F) != 0) {
+          b.addByte((v & 0x7F) | 0x80);
+          v >>= 7;
+        }
+        b.addByte(v & 0x7F);
+        b.add(payload);
+      }
+
       final streamBuilder = BytesBuilder();
-      // Length varint + payload 1
-      streamBuilder.addByte(bytes1.length);
-      streamBuilder.add(bytes1);
-      // Length varint + payload 2
-      streamBuilder.addByte(bytes2.length);
-      streamBuilder.add(bytes2);
+      addDelimited(streamBuilder, bytes1);
+      addDelimited(streamBuilder, bytes2);
 
       final streamData = streamBuilder.toBytes();
 

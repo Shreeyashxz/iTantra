@@ -55,7 +55,8 @@ void main() {
               isMtEnabled INTEGER NOT NULL DEFAULT 1,
               sttPrecision TEXT NOT NULL DEFAULT 'INT8',
               mtPrecision TEXT NOT NULL DEFAULT 'INT8',
-              normalizerMode TEXT NOT NULL DEFAULT 'ADVANCED'
+              normalizerMode TEXT NOT NULL DEFAULT 'ADVANCED',
+              deviceId TEXT NOT NULL DEFAULT ''
             )
           ''');
         },

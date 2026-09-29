@@ -68,6 +68,7 @@ class LanguagePackManager {
   }
 
   Directory? _cachedModelsDir;
+  bool _syncKickedOff = false;
 
   Future<Directory> getModelsDirectory() async {
     if (_cachedModelsDir != null && await _cachedModelsDir!.exists()) {
@@ -79,8 +80,12 @@ class LanguagePackManager {
       await dir.create(recursive: true);
     }
     _cachedModelsDir = dir;
-    // Non-blocking background sync of existing models from candidate locations
-    unawaited(syncExistingModels());
+    // One background sync per process — previously every is*Available call
+    // kicked off a GB-scale copy, flipping rows mid-check on checkModelStatus.
+    if (!_syncKickedOff) {
+      _syncKickedOff = true;
+      unawaited(syncExistingModels());
+    }
     return dir;
   }
 
@@ -119,11 +124,14 @@ class LanguagePackManager {
       } catch (_) {}
     }
 
-    // 5. Current Working Directory (development runs / bundled workspace models)
-    try {
-      dirs.add(Directory(p.join(Directory.current.path, 'models')));
-      dirs.add(Directory(p.join(Directory.current.path, 'converted_models')));
-    } catch (_) {}
+    // 5. Current Working Directory (Windows/Linux dev runs only — never on Android).
+    // Android's Directory.current is '/' and must never be used for models.
+    if (!kIsWeb && (Platform.isWindows || Platform.isLinux)) {
+      try {
+        dirs.add(Directory(p.join(Directory.current.path, 'models')));
+        dirs.add(Directory(p.join(Directory.current.path, 'converted_models')));
+      } catch (_) {}
+    }
 
     return dirs;
   }
@@ -138,22 +146,9 @@ class LanguagePackManager {
         await primaryDir.create(recursive: true);
       }
 
-      // Check bundled converted_models Rasa-13
-      final localRasaModel = File('converted_models/vits_rasa13_6in.onnx');
-      final localRasaTokens = File('converted_models/tokens.txt');
-      if (await localRasaModel.exists() && (await localRasaModel.length()) > 10 * 1024 * 1024) {
-        final targetRasaDir = Directory(p.join(primaryDir.path, 'tts', 'rasa13'));
-        final targetRasaModel = File(p.join(targetRasaDir.path, 'vits.onnx'));
-        final targetRasaTokens = File(p.join(targetRasaDir.path, 'tokens.txt'));
-        if (!await targetRasaModel.exists() || (await targetRasaModel.length()) < 10 * 1024 * 1024) {
-          await targetRasaDir.create(recursive: true);
-          await localRasaModel.copy(targetRasaModel.path);
-          if (await localRasaTokens.exists()) {
-            await localRasaTokens.copy(targetRasaTokens.path);
-          }
-          debugPrint('[LanguagePackManager] Synced bundled Rasa-13 model to persistent storage: ${targetRasaModel.path}');
-        }
-      }
+      // Bundled workspace models are dev-only (Windows/Linux). On Android
+      // models live only under getApplicationSupportDirectory()/models.
+      // (Previous File('converted_models/...') CWD lookup removed: breaks on Android.)
 
       // Remove legacy fake Xlit checkpoints: a Fairseq `.pt` renamed to
       // `.onnx` can never run in ONNX Runtime. The real bundle lives at
@@ -211,13 +206,6 @@ class LanguagePackManager {
   }
 
   Future<bool> isRasa13Available() async {
-    final localRasaModel = File('converted_models/vits_rasa13_6in.onnx');
-    final localRasaTokens = File('converted_models/tokens.txt');
-    if (localRasaModel.existsSync() &&
-        localRasaTokens.existsSync() &&
-        localRasaModel.lengthSync() > 10 * 1024 * 1024) {
-      return true;
-    }
     final dir = await getModelsDirectory();
     final model = File(p.join(dir.path, 'tts', 'rasa13', 'vits.onnx'));
     final tokens = File(p.join(dir.path, 'tts', 'rasa13', 'tokens.txt'));
@@ -231,8 +219,9 @@ class LanguagePackManager {
     final dir = await getModelsDirectory();
     final model = File(p.join(dir.path, 'tts', languageCode, 'vits.onnx'));
     final tokens = File(p.join(dir.path, 'tts', languageCode, 'tokens.txt'));
+    // MMS per-lang models are ~32MB; 20MB floor rejects truncated downloads.
     if (await model.exists() && await tokens.exists()) {
-      return (await model.length()) > 10 * 1024 * 1024;
+      return (await model.length()) > 20 * 1024 * 1024 && (await tokens.length()) > 100;
     }
     return false;
   }
@@ -251,35 +240,43 @@ class LanguagePackManager {
     final dir = await getModelsDirectory();
     final indicFp32 = File(p.join(dir.path, 'stt', 'indic_conformer_fp32.onnx'));
     final tokens = File(p.join(dir.path, 'stt', 'tokens.txt'));
-    return await indicFp32.exists() && await tokens.exists();
+    // FP32 is ~168MB; 10MB floor rejects error-pages/partials (was exists-only).
+    if (await indicFp32.exists() && await tokens.exists()) {
+      return (await indicFp32.length()) > 10 * 1024 * 1024 && (await tokens.length()) > 100;
+    }
+    return false;
+  }
+
+  /// MT availability must match what [NeuralMtEngine] actually loads:
+  /// encoder graph + decoder graph + weights + tokenizer. Checking `.data`
+  /// alone reported "ready" for halves that can never run.
+  Future<bool> _isMtBundleComplete(Directory modelDir) async {
+    final enc = File(p.join(modelDir.path, 'encoder_model.onnx'));
+    final dec = File(p.join(modelDir.path, 'decoder_model.onnx'));
+    final encData = File(p.join(modelDir.path, 'encoder_model.onnx.data'));
+    final decData = File(p.join(modelDir.path, 'decoder_shared.onnx.data'));
+    final spm = File(p.join(modelDir.path, 'spm.model'));
+    if (!await enc.exists() || !await dec.exists() || !await spm.exists()) return false;
+    if ((await enc.length()) < 1024 || (await dec.length()) < 1024 || (await spm.length()) < 1000) {
+      return false;
+    }
+    if (!await encData.exists() || !await decData.exists()) return false;
+    return (await encData.length()) > 50 * 1024 * 1024 && (await decData.length()) > 50 * 1024 * 1024;
   }
 
   Future<bool> isMtIndicIndicAvailable() async {
     final dir = await getModelsDirectory();
-    final modelDir = Directory(p.join(dir.path, 'mt', 'indic_indic', 'int8'));
-    final enc = File(p.join(modelDir.path, 'encoder_model.onnx.data'));
-    final dec = File(p.join(modelDir.path, 'decoder_shared.onnx.data'));
-    if (await enc.exists() && await dec.exists()) {
-      return (await enc.length()) > 50 * 1024 * 1024 && (await dec.length()) > 50 * 1024 * 1024;
+    if (await _isMtBundleComplete(Directory(p.join(dir.path, 'mt', 'indic_indic', 'int8')))) {
+      return true;
     }
     // Backward compatibility with legacy flat directory layout
-    final legacyEnc = File(p.join(dir.path, 'mt', 'int8', 'encoder_model.onnx.data'));
-    final legacyDec = File(p.join(dir.path, 'mt', 'int8', 'decoder_shared.onnx.data'));
-    if (await legacyEnc.exists() && await legacyDec.exists()) {
-      return (await legacyEnc.length()) > 50 * 1024 * 1024 && (await legacyDec.length()) > 50 * 1024 * 1024;
-    }
+    if (await _isMtBundleComplete(Directory(p.join(dir.path, 'mt', 'int8')))) return true;
     return false;
   }
 
   Future<bool> isMtIndicEnAvailable() async {
     final dir = await getModelsDirectory();
-    final modelDir = Directory(p.join(dir.path, 'mt', 'indic_en', 'int8'));
-    final enc = File(p.join(modelDir.path, 'encoder_model.onnx.data'));
-    final dec = File(p.join(modelDir.path, 'decoder_shared.onnx.data'));
-    if (await enc.exists() && await dec.exists()) {
-      return (await enc.length()) > 50 * 1024 * 1024 && (await dec.length()) > 50 * 1024 * 1024;
-    }
-    return false;
+    return _isMtBundleComplete(Directory(p.join(dir.path, 'mt', 'indic_en', 'int8')));
   }
 
   Future<bool> isMtAvailable() async {
@@ -288,12 +285,21 @@ class LanguagePackManager {
 
   Future<bool> isMtFp16Available() async {
     final dir = await getModelsDirectory();
-    final subModel = File(p.join(dir.path, 'mt', 'fp16', 'encoder_model.onnx'));
-    final subData = File(p.join(dir.path, 'mt', 'fp16', 'encoder_model.onnx.data'));
-    final subSpm = File(p.join(dir.path, 'mt', 'fp16', 'spm.model'));
-    if (await subModel.exists() && await subData.exists() && await subSpm.exists()) {
-      return (await subData.length()) > 100 * 1024 * 1024;
+    // FP16 download is currently encoder-only (no decoder bundle is published),
+    // and the seq2seq loader needs a decoder — so an encoder-only dir must NOT
+    // report ready. Require the decoder before claiming installed.
+    Future<bool> fp16Complete(Directory d) async {
+      final enc = File(p.join(d.path, 'encoder_model.onnx'));
+      final dec = File(p.join(d.path, 'decoder_model.onnx'));
+      final data = File(p.join(d.path, 'encoder_model.onnx.data'));
+      final spm = File(p.join(d.path, 'spm.model'));
+      if (!await enc.exists() || !await dec.exists() || !await data.exists() || !await spm.exists()) {
+        return false;
+      }
+      return (await data.length()) > 100 * 1024 * 1024;
     }
+
+    if (await fp16Complete(Directory(p.join(dir.path, 'mt', 'fp16')))) return true;
     // Backward compatibility with legacy flat directory layout
     final model = File(p.join(dir.path, 'mt', 'indictrans2_fp16.onnx'));
     final data = File(p.join(dir.path, 'mt', 'encoder_model.onnx.data'));
@@ -302,17 +308,19 @@ class LanguagePackManager {
     return (await data.length()) > 100 * 1024 * 1024;
   }
 
-  /// Checks if AI4Bharat IndicLID FastText model weights exist in local models storage
+  /// Checks if AI4Bharat IndicLID FastText model weights exist in local models storage.
+  /// Real weights are 261MB (`model_baseline_roman.bin`); 100MB floor rejects
+  /// HTML error pages and truncated partials.
   Future<bool> isLidAvailable() async {
     final dir = await getModelsDirectory();
     final target = File(p.join(dir.path, 'lid', 'indiclid_fasttext.bin'));
     final targetRoot = File(p.join(dir.path, 'indiclid_fasttext.bin'));
-    if (await target.exists() && (await target.length()) > 1024) return true;
-    if (await targetRoot.exists() && (await targetRoot.length()) > 1024) return true;
+    if (await target.exists() && (await target.length()) > 100 * 1024 * 1024) return true;
+    if (await targetRoot.exists() && (await targetRoot.length()) > 100 * 1024 * 1024) return true;
     return false;
   }
 
-  /// Downloads AI4Bharat IndicLID FastText (~14 MB model weights)
+  /// Downloads AI4Bharat IndicLID FastText (261MB model weights — Wi-Fi recommended)
   Future<bool> downloadLid() async {
     final modelsDir = await getModelsDirectory();
     final lidDir = Directory(p.join(modelsDir.path, 'lid'));
@@ -321,7 +329,7 @@ class LanguagePackManager {
     }
     final targetFile = File(p.join(lidDir.path, 'indiclid_fasttext.bin'));
 
-    if (await targetFile.exists() && (await targetFile.length()) > 1024) {
+    if (await targetFile.exists() && (await targetFile.length()) > 100 * 1024 * 1024) {
       _emitState(const DownloadStateCompleted('IndicLID-FastText Ready'));
       return true;
     }
@@ -330,9 +338,9 @@ class LanguagePackManager {
         'https://huggingface.co/ai4bharat/IndicLID-FTN/resolve/main/model_baseline_roman.bin';
 
     try {
-      _emitState(const DownloadStateDownloading('AI4Bharat IndicLID-FastText (~14 MB)', 0, modelKey: 'lid'));
+      _emitState(const DownloadStateDownloading('AI4Bharat IndicLID-FastText (261 MB)', 0, modelKey: 'lid'));
       await _downloadFileWithRedirects(lidUrl, targetFile, (percent) {
-        _emitState(DownloadStateDownloading('IndicLID-FastText (~14 MB)', percent, modelKey: 'lid'));
+        _emitState(DownloadStateDownloading('IndicLID-FastText (261 MB)', percent, modelKey: 'lid'));
       });
       _emitState(const DownloadStateCompleted('AI4Bharat IndicLID-FastText Ready'));
       return true;
@@ -361,15 +369,21 @@ class LanguagePackManager {
   /// Checks if a genuine IndicXlit encoder+decoder ONNX bundle exists.
   /// Legacy single-file `indicxlit.onnx` (a renamed Fairseq `.pt` that could
   /// never run in ONNX Runtime) is explicitly NOT accepted.
+  /// 1MB-per-graph floor + vocab requirement rejects error pages/partials.
   Future<bool> isIndicXlitAvailable() async {
     final dir = await getModelsDirectory();
-    final enc = File(p.join(dir.path, 'xlit', 'int8', 'encoder_model.onnx'));
-    final dec = File(p.join(dir.path, 'xlit', 'int8', 'decoder_model.onnx'));
+    final bundle = Directory(p.join(dir.path, 'xlit', 'int8'));
+    final enc = File(p.join(bundle.path, 'encoder_model.onnx'));
+    final dec = File(p.join(bundle.path, 'decoder_model.onnx'));
+    final vocab = File(p.join(bundle.path, 'vocab.json'));
+    final vocabAlt = File(p.join(bundle.path, 'tokenizer.json'));
     if (await enc.exists() &&
         await dec.exists() &&
-        (await enc.length()) > 1024 &&
-        (await dec.length()) > 1024) {
-      return true;
+        (await enc.length()) > 1024 * 1024 &&
+        (await dec.length()) > 1024 * 1024) {
+      if (await vocab.exists() || await vocabAlt.exists()) return true;
+      // Graphs present but no vocab — neural would run on 4-token fallback.
+      return false;
     }
     return false;
   }
@@ -817,19 +831,11 @@ class LanguagePackManager {
       return true;
     }
 
-    // 1. Check if local sanitized 6-input model is ready
-    final localConverted = File('converted_models/vits_rasa13_6in.onnx');
-    final localTokens = File('converted_models/tokens.txt');
-
+    // Dev-workspace copy removed: on Android only getApplicationSupportDirectory
+    // is valid. Windows/Linux devs should place models under exeDir/models or
+    // app-support/models so syncExistingModels() picks them up.
     try {
       _emitState(const DownloadStateDownloading('AI4Bharat Rasa-13 VITS (All Languages)', 0, modelKey: 'rasa13'));
-
-      if (await localConverted.exists() && await localTokens.exists()) {
-        await localConverted.copy(targetModel.path);
-        await localTokens.copy(targetTokens.path);
-        _emitState(const DownloadStateCompleted('AI4Bharat Rasa-13 VITS Ready (All Languages)'));
-        return true;
-      }
 
       // 2. Download from public repository
       const rasaBaseUrl = 'https://huggingface.co/MatiasLin/sherpa-onnx-vits-rasa-13/resolve/main';
@@ -967,7 +973,8 @@ class LanguagePackManager {
       final targetTokens = File(p.join(ttsDir.path, 'tokens.txt'));
       final targetLexicon = File(p.join(ttsDir.path, 'lexicon.txt'));
 
-      if (!await targetModel.exists() || (await targetModel.length()) < 10 * 1024 * 1024) {
+      // 20MB floor matches isMmsAvailable — smaller files are truncated.
+      if (!await targetModel.exists() || (await targetModel.length()) < 20 * 1024 * 1024) {
         _emitState(DownloadStateDownloading('${langMeta.englishName} Voice (Model)', 0, modelKey: 'tts_$languageCode'));
         await _downloadFileWithRedirects('$mmsBaseUrl/model.onnx', targetModel, (percent) {
           _emitState(DownloadStateDownloading('${langMeta.englishName} Voice (Model)', percent, modelKey: 'tts_$languageCode'));
@@ -1022,10 +1029,16 @@ class LanguagePackManager {
     File destination,
     void Function(int percent) onProgress,
   ) async {
+    final startUri = Uri.parse(urlStr);
+    // Only HTTPS model hosts — prevents cleartext redirect hijack on field Wi-Fi.
+    if (startUri.scheme != 'https') {
+      throw HttpException('Refusing non-HTTPS model URL: $urlStr');
+    }
     final client = HttpClient();
     client.connectionTimeout = const Duration(seconds: 30);
+    final tempFile = File('${destination.path}.tmp');
     try {
-      var currentUri = Uri.parse(urlStr);
+      var currentUri = startUri;
       HttpClientResponse? response;
       var redirects = 0;
 
@@ -1044,6 +1057,9 @@ class LanguagePackManager {
           await response.drain<void>();
           if (location != null) {
             currentUri = currentUri.resolve(location);
+            if (currentUri.scheme != 'https') {
+              throw HttpException('Refusing non-HTTPS redirect to $currentUri');
+            }
             redirects++;
             continue;
           }
@@ -1056,7 +1072,6 @@ class LanguagePackManager {
       }
 
       final contentLength = response.contentLength;
-      final tempFile = File('${destination.path}.tmp');
       final sink = tempFile.openWrite();
 
       var received = 0;
@@ -1065,6 +1080,11 @@ class LanguagePackManager {
       await for (final chunk in response) {
         sink.add(chunk);
         received += chunk.length;
+        // 600MB sanity cap per file (largest MT bundle ~500MB).
+        if (received > 600 * 1024 * 1024) {
+          await sink.close();
+          throw HttpException('Download exceeds 600MB cap — aborting');
+        }
         if (contentLength > 0) {
           final percent = ((received * 100) / contentLength).clamp(0, 100).toInt();
           if (percent != lastReported) {
@@ -1078,22 +1098,29 @@ class LanguagePackManager {
       await sink.close();
 
       if (contentLength > 0 && received < contentLength) {
-        if (await tempFile.exists()) {
-          await tempFile.delete();
-        }
         throw HttpException('Download incomplete: received $received of $contentLength bytes');
+      }
+
+      // Reject truncated ONNX (would crash ORT on load).
+      if (destination.path.endsWith('.onnx') && received < 1024 * 1024) {
+        throw HttpException('Downloaded ONNX too small ($received B) — likely error page');
       }
 
       if (await destination.exists()) {
         await destination.delete();
       }
       await tempFile.rename(destination.path);
+    } catch (_) {
+      try {
+        if (await tempFile.exists()) await tempFile.delete();
+      } catch (_) {}
+      rethrow;
     } finally {
       client.close(force: true);
     }
   }
 
   void dispose() {
-    _downloadStateController.close();
+    if (!_downloadStateController.isClosed) _downloadStateController.close();
   }
 }

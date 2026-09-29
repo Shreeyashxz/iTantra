@@ -24,20 +24,32 @@ class PttManager extends ChangeNotifier {
   bool _isSttInitializing = false;
   bool get isSttInitializing => _isSttInitializing;
 
+  bool _disposed = false;
+
   PttManager({
     required this.commPipeline,
     required this.speechEngine,
     required this.database,
   });
 
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
+
+  void _safeNotify() {
+    if (!_disposed) notifyListeners();
+  }
+
   void setSttInitializing(bool val) {
     _isSttInitializing = val;
-    notifyListeners();
+    _safeNotify();
   }
 
   void clearPttError() {
     _pttError = null;
-    notifyListeners();
+    _safeNotify();
   }
 
   Future<void> onPttPressed({
@@ -53,38 +65,54 @@ class PttManager extends ChangeNotifier {
       debugPrint('[PTT] STT not loaded — attempting on-the-fly init...');
       setSttInitializing(true);
       try {
-        final ok = await speechEngine.initStt();
+        final ok = await speechEngine.initStt().timeout(
+          const Duration(seconds: 20),
+          onTimeout: () => false,
+        );
         setSttInitializing(false);
         if (!ok) {
           _pttError = 'STT model not loaded. Download from Settings → Language Packs.';
-          notifyListeners();
+          _safeNotify();
           return;
         }
       } catch (e) {
         setSttInitializing(false);
         _pttError = 'STT initialization error: $e';
-        notifyListeners();
+        _safeNotify();
         return;
       }
     }
 
-    _isTransmitting = true;
-    notifyListeners();
     debugPrint('[PTT] ▶ Recording started (lang=$selectedLanguage)');
 
-    await commPipeline.startTransmission(
-      senderId: deviceId,
-      languageCode: selectedLanguage,
-      onTranscript: (text) async {
-        if (text.trim().isNotEmpty) {
-          debugPrint('[PTT] Live transcript: "$text"');
-        }
-      },
-      onVoiceDetected: (isDetected) {
-        _isVoiceDetected = isDetected;
-        notifyListeners();
-      },
-    );
+    try {
+      await commPipeline.startTransmission(
+        senderId: deviceId,
+        languageCode: selectedLanguage,
+        onTranscript: (text) async {
+          if (text.trim().isNotEmpty) {
+            debugPrint('[PTT] Live transcript: "$text"');
+          }
+        },
+        onVoiceDetected: (isDetected) {
+          _isVoiceDetected = isDetected;
+          _safeNotify();
+        },
+      ).timeout(const Duration(seconds: 10));
+    } catch (e) {
+      _pttError = 'Could not start microphone: $e';
+      _safeNotify();
+      return;
+    }
+
+    // Only mark transmitting if pipeline actually started (mic permission etc.).
+    if (!commPipeline.isTransmitting) {
+      _pttError = 'Microphone unavailable — check permission.';
+      _safeNotify();
+      return;
+    }
+    _isTransmitting = true;
+    _safeNotify();
   }
 
   Future<void> onPttReleased({
@@ -96,10 +124,21 @@ class PttManager extends ChangeNotifier {
 
     _isTransmitting = false;
     _isVoiceDetected = false;
-    notifyListeners();
+    _safeNotify();
     debugPrint('[PTT] ■ Recording stopped — finalizing STT...');
 
-    final transcript = await commPipeline.stopTransmissionAndGetTranscript();
+    String transcript = '';
+    try {
+      transcript = await commPipeline.stopTransmissionAndGetTranscript().timeout(
+        const Duration(seconds: 15),
+        onTimeout: () {
+          debugPrint('[PTT] STT finalize timed out');
+          return '';
+        },
+      );
+    } catch (e) {
+      debugPrint('[PTT] STT finalize error: $e');
+    }
 
     if (transcript.isNotEmpty) {
       debugPrint('[PTT] Final transcript: "$transcript" — saving to DB');
@@ -117,27 +156,34 @@ class PttManager extends ChangeNotifier {
     }
   }
 
-  void toggleVadMode({
+  Future<void> toggleVadMode({
     required String deviceId,
     required String selectedLanguage,
-  }) {
+  }) async {
     _isVadMode = !_isVadMode;
     if (_isVadMode) {
-      commPipeline.startVadAutoMode(
-        senderId: deviceId,
-        languageCode: selectedLanguage,
-        onTranscript: (text) {},
-        onVoiceDetected: (isDetected) {
-          _isVoiceDetected = isDetected;
-          _isTransmitting = commPipeline.isTransmitting;
-          notifyListeners();
-        },
-      );
+      try {
+        await commPipeline.startVadAutoMode(
+          senderId: deviceId,
+          languageCode: selectedLanguage,
+          onTranscript: (text) {},
+          onVoiceDetected: (isDetected) {
+            _isVoiceDetected = isDetected;
+            _isTransmitting = commPipeline.isTransmitting;
+            _safeNotify();
+          },
+        );
+      } catch (e) {
+        _isVadMode = false;
+        _pttError = 'Could not start hands-free mode: $e';
+      }
     } else {
-      commPipeline.stopVadAutoMode();
+      try {
+        await commPipeline.stopVadAutoMode();
+      } catch (_) {}
       _isTransmitting = false;
       _isVoiceDetected = false;
     }
-    notifyListeners();
+    _safeNotify();
   }
 }
